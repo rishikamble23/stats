@@ -1,0 +1,323 @@
+"use client";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { saveCard } from "@/lib/actions/cards";
+import { copyBlobToClipboard, downloadBlob, renderCardPng, slugify } from "@/lib/cards/export";
+import { providerForConnection } from "@/lib/cards/resolve";
+import { SIZES, defaultCardConfig, type CardConfig } from "@/lib/cards/types";
+import { DEMO_CONNECTION } from "@/lib/metrics/demo";
+import { describeChange, formatValue } from "@/lib/metrics/format";
+import { PERIODS, type ClientConnection, type MetricRef } from "@/lib/metrics/types";
+import { CardPreview } from "../card/CardPreview";
+import { useCardData } from "../card/useCardData";
+import { Button, Field, Input, Panel, Segmented, Switch, cn } from "../ui";
+import { MetricPicker } from "./MetricPicker";
+import { ThemePicker } from "./ThemePicker";
+
+const EMOJI_PICKS = ["🚀", "✨", "📈", "💸", "⭐", "🔥", "🎉", "🌱", "🐣", "💛", "🧑‍🚀", "🍋"];
+
+export interface StudioProps {
+  mode: "demo" | "app";
+  connections: ClientConnection[];
+  initial?: { id?: string; name: string; config: CardConfig };
+}
+
+function firstMetricRef(connections: ClientConnection[]): MetricRef {
+  const conn = connections[0];
+  const provider = providerForConnection(conn);
+  if (conn && provider && provider.metrics.length) return { connectionId: conn.id, metric: provider.metrics[0].key, params: {} };
+  return { connectionId: DEMO_CONNECTION.id, metric: "mrr", params: {} };
+}
+
+export function Studio({ mode, connections, initial }: StudioProps) {
+  const router = useRouter();
+  const [config, setConfig] = useState<CardConfig>(() => initial?.config ?? { ...defaultCardConfig([firstMetricRef(connections)]), appName: "" });
+  const [name, setName] = useState(initial?.name ?? "");
+  const [cardId, setCardId] = useState(initial?.id);
+  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState<"download" | "copy" | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const { slots, refresh, loading } = useCardData(config, connections);
+  const size = SIZES[config.size];
+
+  const update = useCallback((patch: Partial<CardConfig>) => {
+    setConfig((c) => ({ ...c, ...patch }));
+    setDirty(true);
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const setTemplate = (template: CardConfig["template"]) => {
+    // Single & milestone cards show exactly one metric.
+    update({ template, metrics: template === "stack" ? config.metrics : [config.metrics[0]] });
+  };
+
+  const exportPng = async (action: "download" | "copy") => {
+    const node = cardRef.current;
+    if (!node) return;
+    setBusy(action);
+    try {
+      const blob = await renderCardPng(node, { width: size.w, height: size.h });
+      if (action === "download") {
+        const primary = slots[0];
+        const fname = `${slugify(config.appName || "howitsgoing")}-${slugify(primary?.def.shortLabel ?? "card")}-${new Date().toISOString().slice(0, 10)}.png`;
+        downloadBlob(blob, fname);
+        setToast("Saved! Go post it 🎉");
+      } else {
+        const ok = await copyBlobToClipboard(blob);
+        setToast(ok ? "Copied — paste it anywhere 📋" : "Clipboard blocked here; downloading instead");
+        if (!ok) downloadBlob(blob, "howitsgoing.png");
+      }
+    } catch (err) {
+      setToast(`Export failed: ${(err as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const copyPostText = async () => {
+    const s = slots[0];
+    if (!s?.result) return;
+    const value = formatValue(s.result.value, s.def.format, s.result.currency);
+    const change = describeChange(s.result, s.def.kind, s.def.format, config.period);
+    const who = config.appName ? `${config.appName} update: ` : "";
+    const changeText = change ? ` (${change.text} ${change.context})` : "";
+    const text = `${s.def.emoji} ${who}${s.label.toLowerCase()} is at ${value}${changeText}. #buildinpublic`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setToast("Post text copied ✍️");
+    } catch {
+      setToast("Couldn't access the clipboard");
+    }
+  };
+
+  const onSave = async () => {
+    setSaving(true);
+    const res = await saveCard({ id: cardId, name: name || defaultName(), config });
+    setSaving(false);
+    if (!res.ok) {
+      setToast(res.error);
+      return;
+    }
+    setDirty(false);
+    setToast("Card saved ✨");
+    if (!cardId) {
+      setCardId(res.data.id);
+      router.replace(`/app/cards/${res.data.id}`);
+    }
+  };
+
+  const defaultName = () => {
+    const s = slots[0];
+    return s ? `${config.appName ? config.appName + " · " : ""}${s.def.shortLabel}` : "Untitled card";
+  };
+
+  const setMetric = (i: number, ref: MetricRef & { label?: string }) => {
+    const metrics = [...config.metrics];
+    metrics[i] = ref;
+    update({ metrics });
+  };
+
+  return (
+    <div className="mx-auto w-full max-w-[1280px] px-4 pb-16 sm:px-6">
+      {mode === "demo" && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-lemon bg-lemon/40 px-4 py-3 text-sm font-semibold text-ink/80">
+          <span>🧪 You&apos;re playing with sample numbers. Connect your own tools to make real cards.</span>
+          <Button href="/login" size="sm">
+            Connect my data →
+          </Button>
+        </div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-[400px_minmax(0,1fr)] lg:items-start">
+        {/* Controls */}
+        <div className="order-2 grid gap-4 lg:order-1">
+          <Panel
+            title={config.template === "stack" ? "Metrics" : "Metric"}
+            action={
+              config.template === "stack" && config.metrics.length < 4 ? (
+                <Button size="sm" variant="secondary" onClick={() => update({ metrics: [...config.metrics, firstMetricRef(connections)] })}>
+                  + Add
+                </Button>
+              ) : null
+            }
+          >
+            <div className="grid gap-3">
+              {config.metrics.map((ref, i) => (
+                <MetricPicker
+                  key={i}
+                  value={ref}
+                  index={config.template === "stack" ? i : undefined}
+                  connections={connections}
+                  onChange={(next) => setMetric(i, next)}
+                  onRemove={config.template === "stack" && config.metrics.length > 1 ? () => update({ metrics: config.metrics.filter((_, j) => j !== i) }) : undefined}
+                />
+              ))}
+            </div>
+            {mode === "app" && connections.length === 0 && (
+              <p className="mt-3 rounded-xl bg-ink/[0.04] px-3 py-2 text-xs font-semibold text-ink/60">
+                No tools connected yet.{" "}
+                <Link href="/app/connections" className="underline decoration-2 underline-offset-2 hover:text-ink">
+                  Connect Stripe, PostHog, GitHub…
+                </Link>
+              </p>
+            )}
+          </Panel>
+
+          <Panel title="Layout">
+            <div className="grid gap-3">
+              <Segmented
+                value={config.template}
+                onChange={setTemplate}
+                options={[
+                  { value: "single", label: "Single" },
+                  { value: "stack", label: "Stack" },
+                  { value: "milestone", label: "Milestone" },
+                ]}
+              />
+              <Segmented
+                value={config.size}
+                onChange={(size) => update({ size })}
+                options={(Object.keys(SIZES) as (keyof typeof SIZES)[]).map((k) => ({ value: k, label: SIZES[k].label, title: SIZES[k].hint }))}
+              />
+              <Segmented value={config.period} onChange={(period) => update({ period })} options={PERIODS.map((p) => ({ value: p.id, label: p.short }))} />
+            </div>
+          </Panel>
+
+          <Panel title="Theme">
+            <ThemePicker value={config.theme} onChange={(theme) => update({ theme })} />
+          </Panel>
+
+          <Panel title="Words">
+            <div className="grid gap-3">
+              <div className="grid grid-cols-[1fr_auto] gap-3">
+                <Field label="App name">
+                  <Input placeholder="e.g. Pixelfolio" value={config.appName} onChange={(e) => update({ appName: e.target.value })} maxLength={40} />
+                </Field>
+                <Field label="Sticker">
+                  <Input className="w-16 text-center text-lg" value={config.emoji} onChange={(e) => update({ emoji: e.target.value })} maxLength={8} placeholder="🚀" />
+                </Field>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {EMOJI_PICKS.map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    onClick={() => update({ emoji: config.emoji === e ? "" : e })}
+                    className={cn("grid size-8 place-items-center rounded-lg text-lg transition hover:bg-ink/[0.06]", config.emoji === e && "bg-ink/[0.08]")}
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+              <Field label="Headline" help="Overrides the metric name on the card.">
+                <Input placeholder={slots[0]?.label ?? "Monthly revenue"} value={config.headline} onChange={(e) => update({ headline: e.target.value })} maxLength={60} />
+              </Field>
+              {config.template === "milestone" ? (
+                <>
+                  <Field label="Milestone number" help="Leave blank to round down to a nice number automatically.">
+                    <Input
+                      inputMode="decimal"
+                      placeholder={slots[0]?.result ? String(Math.round(slots[0].result.value)) : "1000"}
+                      value={config.milestone?.value ?? ""}
+                      onChange={(e) => {
+                        const n = Number(e.target.value.replace(/[,\s]/g, ""));
+                        update({ milestone: { ...config.milestone, value: e.target.value === "" || Number.isNaN(n) ? undefined : n } });
+                      }}
+                    />
+                  </Field>
+                  <Field label="Message">
+                    <Input placeholder="Thank you for the support 💛" value={config.milestone?.message ?? ""} onChange={(e) => update({ milestone: { ...config.milestone, message: e.target.value } })} maxLength={100} />
+                  </Field>
+                </>
+              ) : (
+                <Field label="Caption">
+                  <Input placeholder="e.g. 3 months since launch" value={config.caption} onChange={(e) => update({ caption: e.target.value })} maxLength={140} />
+                </Field>
+              )}
+            </div>
+          </Panel>
+
+          <Panel title="Details">
+            <div className="grid gap-1">
+              {config.template !== "milestone" && (
+                <>
+                  <Switch checked={config.showChart} onChange={(showChart) => update({ showChart })} label="Chart" description="Trend over the selected period" />
+                  {config.showChart && (
+                    <div className="px-1 pb-2">
+                      <Segmented
+                        value={config.chartStyle}
+                        onChange={(chartStyle) => update({ chartStyle })}
+                        options={[
+                          { value: "area", label: "Area" },
+                          { value: "line", label: "Line" },
+                          { value: "bars", label: "Bars" },
+                        ]}
+                      />
+                    </div>
+                  )}
+                  <Switch checked={config.showChange} onChange={(showChange) => update({ showChange })} label="Change badge" description="▲ 18% vs previous period" />
+                </>
+              )}
+              <Switch checked={config.showDate} onChange={(showDate) => update({ showDate })} label="Today's date" />
+              <Switch checked={config.showWatermark} onChange={(showWatermark) => update({ showWatermark })} label="howitsgoing badge" description="A tiny credit in the corner" />
+            </div>
+          </Panel>
+        </div>
+
+        {/* Preview */}
+        <div className="order-1 lg:sticky lg:top-20 lg:order-2">
+          <div className="rounded-[32px] border border-line bg-white/70 p-4 shadow-soft backdrop-blur sm:p-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-ink/50">
+                <span className={cn("size-2 rounded-full", loading ? "animate-pulse bg-amber-400" : "bg-emerald-400")} />
+                {loading ? "Fetching fresh numbers…" : `Live · ${SIZES[config.size].hint.split("·")[0].trim()} px`}
+              </div>
+              <Button size="sm" variant="ghost" onClick={refresh} disabled={loading}>
+                ↻ Refresh data
+              </Button>
+            </div>
+
+            <div className="flex justify-center">
+              <CardPreview ref={cardRef} config={config} slots={slots} id="studio" />
+            </div>
+
+            {slots.some((s) => s.result?.note) && <p className="mt-3 text-center text-[11px] font-semibold text-ink/45">{slots.find((s) => s.result?.note)?.result?.note}</p>}
+
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+              <Button size="lg" onClick={() => exportPng("download")} loading={busy === "download"} disabled={loading}>
+                ⬇︎ Download PNG
+              </Button>
+              <Button size="lg" variant="secondary" onClick={() => exportPng("copy")} loading={busy === "copy"} disabled={loading}>
+                Copy image
+              </Button>
+              <Button size="lg" variant="ghost" onClick={copyPostText} disabled={!slots[0]?.result}>
+                Copy post text
+              </Button>
+            </div>
+
+            {mode === "app" && (
+              <div className="mt-5 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row sm:items-center">
+                <Input placeholder={defaultName()} value={name} onChange={(e) => setName(e.target.value)} maxLength={80} className="sm:flex-1" />
+                <Button onClick={onSave} loading={saving} variant={dirty || !cardId ? "primary" : "secondary"}>
+                  {cardId ? (dirty ? "Save changes" : "Saved") : "Save card"}
+                </Button>
+              </div>
+            )}
+
+            <div className={cn("pointer-events-none mt-3 text-center text-sm font-bold text-ink transition-opacity", toast ? "opacity-100" : "opacity-0")} aria-live="polite">
+              {toast ?? " "}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
