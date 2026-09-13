@@ -1,10 +1,22 @@
 "use client";
-import { toBlob } from "html-to-image";
+import { toCanvas } from "html-to-image";
 
 const isSafari = () => typeof navigator !== "undefined" && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
-/** Renders a card DOM node to a PNG blob at 2× (e.g. 540 → 1080 px). */
-export async function renderCardPng(node: HTMLElement, opts: { width: number; height: number; pixelRatio?: number }): Promise<Blob> {
+export type CardExportFormat = "png" | "jpeg" | "webp";
+export type CardExportScale = 1 | 2 | 3;
+
+interface CardExportOptions {
+  width: number;
+  height: number;
+  format?: CardExportFormat;
+  pixelRatio?: CardExportScale;
+}
+
+/** Renders a card DOM node in the chosen format, defaulting to PNG at 2×. */
+export async function renderCard(node: HTMLElement, opts: CardExportOptions): Promise<Blob> {
+  const format = opts.format ?? "png";
+  const mimeType = `image/${format}`;
   const options = {
     width: opts.width,
     height: opts.height,
@@ -14,10 +26,30 @@ export async function renderCardPng(node: HTMLElement, opts: { width: number; he
   };
   if (document.fonts?.ready) await document.fonts.ready;
   // Safari occasionally drops fonts/images on the first pass; a warm-up render fixes it.
-  if (isSafari()) await toBlob(node, options);
-  const blob = await toBlob(node, options);
-  if (!blob) throw new Error("Could not render the image.");
-  return blob;
+  if (isSafari()) await toCanvas(node, options);
+  const canvas = await toCanvas(node, options);
+  if (format === "jpeg") {
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not render the image.");
+    // Fill behind the card rather than replacing its theme background.
+    context.save();
+    context.globalCompositeOperation = "destination-over";
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.restore();
+  }
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) reject(new Error("Could not render the image."));
+      else if (blob.type !== mimeType) reject(new Error(`This browser does not support ${format.toUpperCase()} export.`));
+      else resolve(blob);
+    }, mimeType, 0.9);
+  });
+}
+
+/** PNG-only entry point for dashboard downloads and clipboard images. */
+export function renderCardPng(node: HTMLElement, opts: Omit<CardExportOptions, "format">): Promise<Blob> {
+  return renderCard(node, { ...opts, format: "png" });
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {

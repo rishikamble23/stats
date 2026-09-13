@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { saveCard } from "@/lib/actions/cards";
-import { copyBlobToClipboard, downloadBlob, renderCardPng, slugify } from "@/lib/cards/export";
+import { copyBlobToClipboard, downloadBlob, renderCard, renderCardPng, slugify, type CardExportFormat, type CardExportScale } from "@/lib/cards/export";
 import { providerForConnection } from "@/lib/cards/resolve";
 import { SIZES, defaultCardConfig, type CardConfig } from "@/lib/cards/types";
 import { DEMO_CONNECTION } from "@/lib/metrics/demo";
@@ -11,7 +11,7 @@ import { describeChange, formatValue } from "@/lib/metrics/format";
 import { PERIODS, type ClientConnection, type MetricRef } from "@/lib/metrics/types";
 import { CardPreview } from "../card/CardPreview";
 import { useCardData } from "../card/useCardData";
-import { Button, Field, Input, Panel, Segmented, Switch, cn } from "../ui";
+import { Button, Field, Input, Panel, Segmented, Select, Switch, cn } from "../ui";
 import { MetricPicker } from "./MetricPicker";
 import { ThemePicker } from "./ThemePicker";
 
@@ -37,6 +37,8 @@ export function Studio({ mode, connections, initial }: StudioProps) {
   const [cardId, setCardId] = useState(initial?.id);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState<"download" | "copy" | null>(null);
+  const [exportFormat, setExportFormat] = useState<CardExportFormat>("png");
+  const [exportScale, setExportScale] = useState<CardExportScale>(2);
   const [toast, setToast] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -59,15 +61,18 @@ export function Studio({ mode, connections, initial }: StudioProps) {
     update({ template, metrics: template === "stack" ? config.metrics : [config.metrics[0]] });
   };
 
-  const exportPng = async (action: "download" | "copy") => {
+  const exportImage = async (action: "download" | "copy") => {
     const node = cardRef.current;
     if (!node) return;
     setBusy(action);
     try {
-      const blob = await renderCardPng(node, { width: size.w, height: size.h });
+      const dimensions = { width: size.w, height: size.h };
+      const blob = action === "copy"
+        ? await renderCardPng(node, dimensions)
+        : await renderCard(node, { ...dimensions, format: exportFormat, pixelRatio: exportScale });
       if (action === "download") {
         const primary = slots[0];
-        const fname = `${slugify(config.appName || "howitsgoing")}-${slugify(primary?.def.shortLabel ?? "card")}-${new Date().toISOString().slice(0, 10)}.png`;
+        const fname = `${slugify(config.appName || "howitsgoing")}-${slugify(primary?.def.shortLabel ?? "card")}-${new Date().toISOString().slice(0, 10)}.${exportFormat}`;
         downloadBlob(blob, fname);
         setToast("Saved! Go post it 🎉");
       } else {
@@ -136,7 +141,7 @@ export function Studio({ mode, connections, initial }: StudioProps) {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[400px_minmax(0,1fr)] lg:items-start">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[400px_minmax(0,1fr)] lg:items-start">
         {/* Controls */}
         <div className="order-2 grid gap-4 lg:order-1">
           <Panel
@@ -278,7 +283,7 @@ export function Studio({ mode, connections, initial }: StudioProps) {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-bold text-ink/50">
                 <span className={cn("size-2 rounded-full", loading ? "animate-pulse bg-amber-400" : "bg-emerald-400")} />
-                {loading ? "Fetching fresh numbers…" : `Live · ${SIZES[config.size].hint.split("·")[0].trim()} px`}
+                {loading ? "Fetching fresh numbers…" : `Live · ${size.w * exportScale} × ${size.h * exportScale} px`}
               </div>
               <Button size="sm" variant="ghost" onClick={refresh} disabled={loading}>
                 ↻ Refresh data
@@ -291,11 +296,25 @@ export function Studio({ mode, connections, initial }: StudioProps) {
 
             {slots.some((s) => s.result?.note) && <p className="mt-3 text-center text-[11px] font-semibold text-ink/45">{slots.find((s) => s.result?.note)?.result?.note}</p>}
 
-            <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
-              <Button size="lg" onClick={() => exportPng("download")} loading={busy === "download"} disabled={loading}>
-                ⬇︎ Download PNG
+            <div className="mt-5 flex flex-wrap items-end justify-center gap-2">
+              <Field label="Format" className="w-28">
+                <Select aria-label="Format" value={exportFormat} onChange={(e) => setExportFormat(e.target.value as CardExportFormat)} disabled={busy !== null}>
+                  <option value="png">PNG</option>
+                  <option value="jpeg">JPEG</option>
+                  <option value="webp">WebP</option>
+                </Select>
+              </Field>
+              <Field label="Scale" className="w-24">
+                <Select aria-label="Scale" value={exportScale} onChange={(e) => setExportScale(Number(e.target.value) as CardExportScale)} disabled={busy !== null}>
+                  <option value={1}>1×</option>
+                  <option value={2}>2×</option>
+                  <option value={3}>3×</option>
+                </Select>
+              </Field>
+              <Button size="lg" onClick={() => exportImage("download")} loading={busy === "download"} disabled={loading || busy !== null}>
+                ⬇︎ Download {exportFormat.toUpperCase()}
               </Button>
-              <Button size="lg" variant="secondary" onClick={() => exportPng("copy")} loading={busy === "copy"} disabled={loading}>
+              <Button size="lg" variant="secondary" onClick={() => exportImage("copy")} loading={busy === "copy"} disabled={loading || busy !== null}>
                 Copy image
               </Button>
               <Button size="lg" variant="ghost" onClick={copyPostText} disabled={!slots[0]?.result}>
