@@ -9,6 +9,7 @@ import { SIZES, defaultCardConfig, type CardConfig } from "@/lib/cards/types";
 import { DEMO_CONNECTION } from "@/lib/metrics/demo";
 import { describeChange, formatValue } from "@/lib/metrics/format";
 import { PERIODS, type ClientConnection, type MetricRef } from "@/lib/metrics/types";
+import { firstGithubRepo, repoIconUrl } from "@/lib/repo-icon";
 import { CardPreview } from "../card/CardPreview";
 import { useCardData } from "../card/useCardData";
 import { Button, Field, Input, Panel, Segmented, Select, Switch, cn } from "../ui";
@@ -41,9 +42,11 @@ export function Studio({ mode, connections, initial }: StudioProps) {
   const [exportScale, setExportScale] = useState<CardExportScale>(2);
   const [toast, setToast] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [customWords, setCustomWords] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const { slots, refresh, loading } = useCardData(config, connections);
   const size = SIZES[config.size];
+  const githubRepo = firstGithubRepo(config.metrics);
 
   const update = useCallback((patch: Partial<CardConfig>) => {
     setConfig((c) => ({ ...c, ...patch }));
@@ -127,7 +130,33 @@ export function Studio({ mode, connections, initial }: StudioProps) {
   const setMetric = (i: number, ref: MetricRef & { label?: string }) => {
     const metrics = [...config.metrics];
     metrics[i] = ref;
-    update({ metrics });
+    const next: CardConfig = { ...config, metrics };
+    // GitHub repo picked (or changed): auto-fill the card name + owner avatar,
+    // unless the user already typed a custom name. Runs in the event handler
+    // so manual edits are never clobbered by a background effect.
+    const before = firstGithubRepo(config.metrics);
+    const after = firstGithubRepo(next.metrics);
+    if (after && after !== before) {
+      const prevAuto = before ?? "";
+      const prevAutoShort = before?.split("/")[1] ?? "";
+      if (!next.appName || next.appName === prevAuto || next.appName === prevAutoShort) {
+        next.appName = after.slice(0, 40);
+      }
+      if (!next.logoUrl || (before && next.logoUrl === repoIconUrl(before))) {
+        next.logoUrl = repoIconUrl(after);
+      }
+    }
+    if (!after && before && (next.logoUrl ?? "").startsWith("/api/repo-icon")) {
+      next.logoUrl = "";
+    }
+    update(next);
+  };
+
+  const applyRepoInfo = () => {
+    const repo = firstGithubRepo(config.metrics);
+    if (!repo) return;
+    setCustomWords(false);
+    update({ appName: repo.slice(0, 40), logoUrl: repoIconUrl(repo) });
   };
 
   return (
@@ -202,26 +231,51 @@ export function Studio({ mode, connections, initial }: StudioProps) {
 
           <Panel title="Words">
             <div className="grid gap-3">
-              <div className="grid grid-cols-[1fr_auto] gap-3">
-                <Field label="App name">
-                  <Input placeholder="e.g. Pixelfolio" value={config.appName} onChange={(e) => update({ appName: e.target.value })} maxLength={40} />
-                </Field>
-                <Field label="Sticker">
-                  <Input className="w-16 text-center text-lg" value={config.emoji} onChange={(e) => update({ emoji: e.target.value })} maxLength={8} placeholder="🚀" />
-                </Field>
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {EMOJI_PICKS.map((e) => (
-                  <button
-                    key={e}
-                    type="button"
-                    onClick={() => update({ emoji: config.emoji === e ? "" : e })}
-                    className={cn("grid size-8 place-items-center rounded-lg text-lg transition hover:bg-ink/[0.06]", config.emoji === e && "bg-ink/[0.08]")}
-                  >
-                    {e}
-                  </button>
-                ))}
-              </div>
+              {githubRepo && !customWords ? (
+                <div className="flex items-center gap-3 rounded-2xl border border-line bg-white p-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={config.logoUrl || repoIconUrl(githubRepo)}
+                    alt=""
+                    className="size-10 shrink-0 rounded-xl border border-line object-cover"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-extrabold">{config.appName || githubRepo}</div>
+                    <p className="text-xs text-ink/50">Name & icon pulled from GitHub</p>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => setCustomWords(true)}>
+                    Custom
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-[1fr_auto] gap-3">
+                    <Field label="App name">
+                      <Input placeholder="e.g. Pixelfolio" value={config.appName} onChange={(e) => update({ appName: e.target.value })} maxLength={40} />
+                    </Field>
+                    <Field label="Sticker">
+                      <Input className="w-16 text-center text-lg" value={config.emoji} onChange={(e) => update({ emoji: e.target.value })} maxLength={8} placeholder="🚀" />
+                    </Field>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {EMOJI_PICKS.map((e) => (
+                      <button
+                        key={e}
+                        type="button"
+                        onClick={() => update({ emoji: config.emoji === e ? "" : e })}
+                        className={cn("grid size-8 place-items-center rounded-lg text-lg transition hover:bg-ink/[0.06]", config.emoji === e && "bg-ink/[0.08]")}
+                      >
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                  {githubRepo && (
+                    <Button size="sm" variant="secondary" onClick={applyRepoInfo}>
+                      Use GitHub name & icon
+                    </Button>
+                  )}
+                </>
+              )}
               <Field label="Headline" help="Overrides the metric name on the card.">
                 <Input placeholder={slots[0]?.label ?? "Monthly revenue"} value={config.headline} onChange={(e) => update({ headline: e.target.value })} maxLength={60} />
               </Field>

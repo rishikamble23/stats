@@ -1,7 +1,8 @@
-import { forwardRef, type CSSProperties } from "react";
+import { forwardRef, useState, type CSSProperties } from "react";
 import { getTheme, type Theme } from "@/lib/cards/themes";
 import { SIZES, type CardConfig, type CardSlot } from "@/lib/cards/types";
 import { describeChange, formatDate, formatValue, niceMilestone, type ChangeInfo } from "@/lib/metrics/format";
+import { firstGithubRepo, repoIconUrl } from "@/lib/repo-icon";
 import { Chart } from "./Chart";
 
 export interface CardProps {
@@ -44,6 +45,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(function Card({ config
         display: "flex",
         flexDirection: "column",
         borderRadius: 0,
+        boxShadow: theme.dark ? "inset 0 0 0 1px rgba(255,255,255,0.12)" : "inset 0 0 0 1px rgba(28,25,23,0.08)",
       }}
     >
       {theme.blobs && <Blobs theme={theme} size={config.size} />}
@@ -95,29 +97,22 @@ function Blobs({ theme, size }: { theme: Theme; size: CardConfig["size"] }) {
 }
 
 function Header({ config, theme, compact = false }: { config: CardConfig; theme: Theme; compact?: boolean }) {
-  const hasName = Boolean(config.appName || config.emoji);
+  // The sticker is always the round picture for GitHub cards: the stored
+  // logoUrl when set, otherwise derived live from the card's repo so even
+  // older saved cards pick it up without re-editing.
+  const ghRepo = firstGithubRepo(config.metrics);
+  const logo = config.logoUrl || (ghRepo ? repoIconUrl(ghRepo) : "");
+  const hasName = Boolean(config.appName || config.emoji || logo);
   const date = config.showDate ? formatDate(new Date()) : null;
   if (!hasName && !date) return null;
+  const stickerSize = compact ? 32 : 40;
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", minHeight: compact ? 32 : 40 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        {config.emoji && (
-          <span
-            style={{
-              width: compact ? 32 : 40,
-              height: compact ? 32 : 40,
-              borderRadius: "40%",
-              background: theme.surface,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: compact ? 17 : 21,
-              lineHeight: 1,
-              flexShrink: 0,
-            }}
-          >
-            {config.emoji}
-          </span>
+        {logo ? (
+          <RepoIcon url={logo} theme={theme} fallback={config.emoji} size={stickerSize} />
+        ) : (
+          config.emoji && <EmojiTile emoji={config.emoji} theme={theme} size={stickerSize} />
         )}
         {config.appName && (
           <span style={{ fontWeight: 800, fontSize: compact ? 16 : 19, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -127,6 +122,47 @@ function Header({ config, theme, compact = false }: { config: CardConfig; theme:
       </div>
       {date && <Pill theme={theme}>{date}</Pill>}
     </div>
+  );
+}
+
+function EmojiTile({ emoji, theme, size }: { emoji: string; theme: Theme; size: number }) {
+  return (
+    <span
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "40%",
+        background: theme.surface,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: Math.round(size * 0.52),
+        lineHeight: 1,
+        flexShrink: 0,
+      }}
+    >
+      {emoji}
+    </span>
+  );
+}
+
+/**
+ * Repo/brand avatar sticker. Falls back to the emoji tile if the image fails,
+ * so exports always render something (html-to-image snapshots the DOM as-is).
+ */
+function RepoIcon({ url, theme, fallback, size }: { url: string; theme: Theme; fallback: string; size: number }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return fallback ? <EmojiTile emoji={fallback} theme={theme} size={size} /> : null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt=""
+      width={size}
+      height={size}
+      onError={() => setFailed(true)}
+      style={{ width: size, height: size, borderRadius: "40%", objectFit: "cover", background: theme.surface, flexShrink: 0, display: "block" }}
+    />
   );
 }
 
@@ -219,11 +255,36 @@ function Single({ config, slot, theme, id }: { config: CardConfig; slot?: CardSl
   const values = seriesValues(slot);
   const showChart = config.showChart && values.length > 1;
   const chartW = size.w - pad * 2;
+  // Exact vertical budget so fixed-size blocks can never push content out of
+  // the card: header + body/chart + note + footer + the gaps between them.
+  const contentH = size.h - pad * 2;
+  const hasHeader = Boolean(config.appName || config.emoji || config.showDate);
+  const hasFooter = Boolean(config.caption || config.showWatermark);
+  const hasNote = Boolean(result?.note);
+  const headerH = hasHeader ? (wide ? 32 : 40) : 0;
+  const footerH = hasFooter ? 20 : 0;
+  const noteH = hasNote ? 15 : 0;
+  const blocks = [hasHeader, true, showChart, hasNote, hasFooter].filter(Boolean).length;
+  const gapsH = (blocks - 1) * 18;
+  // Wide lays body and chart side by side (row takes the taller one, and the
+  // body at ~136px always fits inside the chart height). Stacked sizes reserve
+  // ~152px for the body and only shrink the chart below its default when the
+  // note + chrome would otherwise overflow (square is the tight one).
+  const wideChartH = Math.max(110, contentH - headerH - footerH - noteH - gapsH);
+  const defaultChartH = config.size === "tall" ? 250 : 170;
+  const stackedChartH = Math.max(90, Math.min(defaultChartH, contentH - headerH - footerH - noteH - gapsH - 152));
 
   const body = (
     <div style={{ display: "flex", flexDirection: "column", gap: wide ? 10 : 12, minWidth: 0 }}>
       <div style={{ textTransform: "uppercase", letterSpacing: 1.2, fontSize: wide ? 12 : 13, fontWeight: 800, color: theme.muted }}>
-        {slot?.loading && !label ? <Skeleton w={160} h={14} theme={theme} r={6} /> : label}
+        {slot?.loading && !label ? (
+          <Skeleton w={160} h={14} theme={theme} r={6} />
+        ) : (
+          <>
+            {slot?.def.emoji && <span style={{ marginRight: 8 }}>{slot.def.emoji}</span>}
+            {label}
+          </>
+        )}
       </div>
       {slot?.loading && !result ? (
         <Skeleton w={wide ? 220 : 280} h={wide ? 60 : 72} theme={theme} r={16} />
@@ -241,12 +302,19 @@ function Single({ config, slot, theme, id }: { config: CardConfig; slot?: CardSl
       id={`${id}-single`}
       values={values}
       width={wide ? Math.round(chartW * 0.45) : chartW}
-      height={wide ? size.h - pad * 2 - 70 : config.size === "tall" ? 250 : 170}
+      height={wide ? wideChartH : stackedChartH}
       style={config.chartStyle}
       color={theme.accent}
       softColor={theme.accentSoft}
+      gridColor={theme.muted}
       baseline={slot!.def.kind === "flow" ? "zero" : "min"}
     />
+  ) : null;
+
+  const note = result?.note ? (
+    <div style={{ fontSize: 11, fontWeight: 600, color: theme.muted, opacity: 0.85, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      {result.note}
+    </div>
   ) : null;
 
   return (
@@ -263,6 +331,7 @@ function Single({ config, slot, theme, id }: { config: CardConfig; slot?: CardSl
           {chart && <div style={{ flexShrink: 0 }}>{chart}</div>}
         </>
       )}
+      {note}
       <Footer config={config} theme={theme} compact={wide} />
     </div>
   );
@@ -284,7 +353,10 @@ function Stack({ config, slots, theme, id }: { config: CardConfig; slots: CardSl
   const headerH = config.appName || config.emoji || config.showDate ? (wide ? 32 : 40) + 18 : 0;
   const footerH = config.caption || config.showWatermark ? 16 + 18 : 0;
   const tileH = (size.h - pad * 2 - headerH - footerH - gap * (rows - 1)) / rows;
-  const showSpark = config.showChart && tileH >= 120;
+  // The sparkline gets whatever vertical room is left after label + number +
+  // change row + padding (~136px); below 36px it would clip, so hide it.
+  const sparkH = Math.min(64, tileH - 136);
+  const showSpark = config.showChart && sparkH >= 36;
 
   return (
     <div style={{ position: "relative", display: "flex", flexDirection: "column", flex: 1, padding: pad, gap: 18 }}>
@@ -295,7 +367,6 @@ function Stack({ config, slots, theme, id }: { config: CardConfig; slots: CardSl
           const valueText = result ? formatValue(result.value, slot.def.format, result.currency, { compact: Math.abs(result.value) >= 10_000 }) : "";
           const change = config.showChange ? describeChange(result, slot.def.kind, slot.def.format, config.period) : null;
           const values = seriesValues(slot);
-          const sparkH = Math.max(36, Math.min(64, tileH - 96));
           return (
             <div
               key={i}
@@ -401,14 +472,14 @@ function Milestone({ config, slot, theme, id }: { config: CardConfig; slot?: Car
       ))}
       <Header config={config} theme={theme} compact={wide} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", gap: wide ? 6 : 10, position: "relative" }}>
-        <div style={{ fontSize: wide ? 40 : 56, lineHeight: 1 }}>{config.emoji || "🎉"}</div>
+        <div style={{ fontSize: wide ? 34 : 56, lineHeight: 1 }}>{config.emoji || "🎉"}</div>
         <div style={{ fontSize: wide ? 15 : 18, fontWeight: 700, color: theme.muted }}>{config.appName ? `${config.appName} just hit` : "We just hit"}</div>
         {slot?.loading && !result ? (
           <Skeleton w={260} h={wide ? 64 : 90} theme={theme} r={20} />
         ) : slot?.error ? (
           <div style={{ fontSize: 18, fontWeight: 700, color: theme.muted }}>😵 {slot.error}</div>
         ) : (
-          <div style={{ fontSize: bigNumberSize(valueText, wide ? 78 : 96), fontWeight: 900, letterSpacing: -3, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{valueText || "—"}</div>
+          <div style={{ fontSize: bigNumberSize(valueText, wide ? 66 : 96), fontWeight: 900, letterSpacing: -3, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{valueText || "—"}</div>
         )}
         <div style={{ fontSize: wide ? 18 : 22, fontWeight: 800, letterSpacing: -0.3 }}>{label}</div>
         <div style={{ fontSize: wide ? 13 : 15, fontWeight: 600, color: theme.muted, maxWidth: 380, marginTop: 4 }}>{message}</div>

@@ -25,6 +25,8 @@ export const cardConfigSchema = z.object({
   metrics: z.array(metricRefSchema).min(1).max(4),
   appName: z.string().max(40).default(""),
   emoji: z.string().max(8).default(""),
+  /** Same-origin repo/brand icon (e.g. /api/repo-icon?repo=owner/name). Takes precedence over `emoji`. */
+  logoUrl: z.string().max(300).default(""),
   headline: z.string().max(60).default(""),
   caption: z.string().max(140).default(""),
   showChart: z.boolean().default(true),
