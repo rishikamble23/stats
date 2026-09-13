@@ -1,6 +1,6 @@
 import "server-only";
 import Stripe from "stripe";
-import { addDays, bucketFlow, buckets, cumulativeLevel, nextBucket, periodWindow, previousWindow, sumInWindow, toKey, type DatedValue, type Window } from "../metrics/series";
+import { bucketFlow, cumulativeLevel, levelInstants, levelWindow, periodWindow, previousWindow, sumInWindow, type DatedValue, type Window } from "../metrics/series";
 import type { MetricResult, SeriesPoint } from "../metrics/types";
 import { baseResult, dominantCurrency, fromMinor, monthlyFactor, ProviderError, requireSecret, type ServerProvider } from "./base";
 
@@ -72,12 +72,8 @@ function levelSeries(subs: SubInfo[], w: Window, pick: (s: SubInfo) => number): 
     }
     return Math.round(total * 100) / 100;
   };
-  const starts = buckets(w);
-  const series = starts.map((d, i) => {
-    const end = i === starts.length - 1 ? addDays(w.to, 1) : nextBucket(d, w.granularity);
-    return { t: toKey(d), v: at(end) };
-  });
-  return { series, previous: at(w.from) };
+  const series = levelInstants(w).map(({ t, at: when }) => ({ t, v: at(when) }));
+  return { series, previous: series[0]?.v ?? at(w.from) };
 }
 
 export const stripe: ServerProvider = {
@@ -123,13 +119,14 @@ export const stripe: ServerProvider = {
     }
 
     if (req.metric === "mrr" || req.metric === "subscriptions") {
+      const lw = levelWindow(w);
       const subs = await loadSubscriptions(s);
       const currency = dominantCurrency(subs.filter((x) => x.active).map((x) => x.currency));
       const inCurrency = subs.filter((x) => x.currency.toLowerCase() === currency);
       if (req.metric === "mrr") {
         const current = inCurrency.filter((x) => x.active).reduce((a, b) => a + b.monthly, 0);
-        const { series, previous } = levelSeries(inCurrency, w, (x) => x.monthly);
-        return baseResult(w, {
+        const { series, previous } = levelSeries(inCurrency, lw, (x) => x.monthly);
+        return baseResult(lw, {
           value: Math.round(current * 100) / 100,
           previous,
           series: series.map((p, i, arr) => (i === arr.length - 1 ? { ...p, v: Math.round(current * 100) / 100 } : p)),
@@ -138,17 +135,18 @@ export const stripe: ServerProvider = {
         });
       }
       const current = inCurrency.filter((x) => x.active).length;
-      const { series, previous } = levelSeries(inCurrency, w, () => 1);
-      return baseResult(w, { value: current, previous, series });
+      const { series, previous } = levelSeries(inCurrency, lw, () => 1);
+      return baseResult(lw, { value: current, previous, series });
     }
 
     if (req.metric === "customers") {
+      const lw = levelWindow(w);
       const customers = await s.customers.list({ limit: 100 }).autoPagingToArray({ limit: MAX_RECORDS }).catch(friendly);
       const dates = customers.map((c) => new Date(c.created * 1000));
-      const series = cumulativeLevel(dates, customers.length, w);
-      return baseResult(w, {
+      const series = cumulativeLevel(dates, customers.length, lw);
+      return baseResult(lw, {
         value: customers.length,
-        previous: series[0] ? series[0].v - dates.filter((d) => d >= w.from && d < nextBucket(w.from, w.granularity)).length : null,
+        previous: series[0]?.v ?? null,
         series,
         note: customers.length >= MAX_RECORDS ? "Showing the first 10,000 customers." : undefined,
       });

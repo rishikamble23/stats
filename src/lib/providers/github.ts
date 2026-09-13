@@ -1,12 +1,14 @@
 import "server-only";
 import { and, eq } from "drizzle-orm";
 import { account, db } from "../db";
-import { periodWindow, resampleCumulative, valueAt, type DatedValue } from "../metrics/series";
+import { levelFromAdditions, levelWindow, periodWindow, type DatedValue } from "../metrics/series";
 import type { MetricResult } from "../metrics/types";
-import { baseResult, ProviderError, request, requestJson, requireParam, type ConnectionContext, type MetricRequest, type ServerProvider } from "./base";
+import { baseResult, isProviderError, ProviderError, request, requestJson, requireParam, type ConnectionContext, type MetricRequest, type ServerProvider } from "./base";
 
 const API = "https://api.github.com";
-const MAX_HISTORY_PAGES = 14; // ≤ 14 requests per star-history fetch
+const HISTORY_WEEKS_PER_PAGE = 30; // GitHub's maximum
+const MAX_HISTORY_PAGES = 4; // 120 weeks; the 12-month window needs 2 pages
+const DAY_S = 86_400;
 
 async function resolveToken(ctx: ConnectionContext): Promise<string | undefined> {
   const own = ctx.secrets.token?.trim();
@@ -62,36 +64,40 @@ interface Repo {
   full_name: string;
   stargazers_count: number;
   forks_count: number;
-  created_at: string;
 }
 
-async function starHistory(repo: string, total: number, createdAt: string, token?: string): Promise<DatedValue[]> {
-  const perPage = 100;
-  const pages = Math.min(Math.ceil(total / perPage), 400); // GitHub caps at 40k stars
-  if (pages === 0) return [{ date: new Date(createdAt), value: 0 }];
+interface HistoryWeek {
+  /** Unix seconds, start of the week (a Sunday). */
+  week: number;
+  total: number;
+  /** Stars added on each day of that week, Sunday first. */
+  days: number[];
+}
 
-  let pageNumbers: number[];
-  if (pages <= MAX_HISTORY_PAGES) {
-    pageNumbers = Array.from({ length: pages }, (_, i) => i + 1);
-  } else {
-    const step = (pages - 1) / (MAX_HISTORY_PAGES - 1);
-    pageNumbers = Array.from(new Set(Array.from({ length: MAX_HISTORY_PAGES }, (_, i) => Math.round(1 + i * step))));
-  }
-
-  const curve: DatedValue[] = [{ date: new Date(createdAt), value: 0 }];
+/**
+ * Stars added per day, from GitHub's privacy-safe star history endpoint
+ * (calendar weeks, newest first, 30 per page). The stargazer list itself has
+ * been restricted to a repo's admins since June 2026, so this is the public
+ * source of history. Only fetches enough pages to reach `since`.
+ */
+async function starsPerDay(repo: string, since: Date, token?: string): Promise<DatedValue[]> {
+  const weeks = Math.ceil((Date.now() - since.getTime()) / (7 * DAY_S * 1000)) + 2;
+  const pages = Math.max(1, Math.min(MAX_HISTORY_PAGES, Math.ceil(weeks / HISTORY_WEEKS_PER_PAGE)));
   const results = await Promise.all(
-    pageNumbers.map((page) =>
-      gh<{ starred_at: string }[]>(`/repos/${repo}/stargazers?per_page=${perPage}&page=${page}`, token, "application/vnd.github.star+json").catch(() => []),
+    Array.from({ length: pages }, (_, i) =>
+      gh<HistoryWeek[]>(`/repos/${repo}/stargazers/history?per_page=${HISTORY_WEEKS_PER_PAGE}&page=${i + 1}`, token).catch((err: unknown) => {
+        if (isProviderError(err) && err.status === 422) throw new ProviderError("GitHub is throttling star history right now. Try again in a minute.", 429);
+        throw err;
+      }),
     ),
   );
-  results.forEach((items, i) => {
-    const page = pageNumbers[i];
-    items.forEach((item, j) => {
-      if (item?.starred_at) curve.push({ date: new Date(item.starred_at), value: (page - 1) * perPage + j + 1 });
+  const out: DatedValue[] = [];
+  for (const week of results.flat()) {
+    week.days.forEach((added, day) => {
+      if (added > 0) out.push({ date: new Date((week.week + day * DAY_S) * 1000), value: added });
     });
-  });
-  curve.push({ date: new Date(), value: total });
-  return curve.sort((a, b) => a.date.getTime() - b.date.getTime());
+  }
+  return out;
 }
 
 export const github: ServerProvider = {
@@ -117,15 +123,10 @@ export const github: ServerProvider = {
     const info = await gh<Repo>(`/repos/${repo}`, token);
 
     if (req.metric === "stars") {
-      const curve = await starHistory(repo, info.stargazers_count, info.created_at, token);
-      const series = resampleCumulative(curve, w);
-      const previous = Math.round(valueAt(curve, w.from));
-      return baseResult(w, {
-        value: info.stargazers_count,
-        previous,
-        series,
-        note: info.stargazers_count > MAX_HISTORY_PAGES * 100 ? "Star history is sampled." : undefined,
-      });
+      const lw = levelWindow(w);
+      const perDay = await starsPerDay(repo, lw.from, token);
+      const series = levelFromAdditions(perDay, info.stargazers_count, lw);
+      return baseResult(lw, { value: info.stargazers_count, previous: series[0]?.v ?? null, series });
     }
 
     if (req.metric === "forks") {

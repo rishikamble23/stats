@@ -1,5 +1,5 @@
 import "server-only";
-import { addDays, bucketFlow, buckets, cumulativeLevel, nextBucket, periodWindow, previousWindow, sumInWindow, toKey, type DatedValue, type Window } from "../metrics/series";
+import { bucketFlow, cumulativeLevel, levelInstants, levelWindow, periodWindow, previousWindow, sumInWindow, type DatedValue, type Window } from "../metrics/series";
 import type { MetricResult, SeriesPoint } from "../metrics/types";
 import { baseResult, monthlyFactor, ProviderError, requestJson, requireSecret, type ConnectionContext, type ServerProvider } from "./base";
 
@@ -105,9 +105,8 @@ async function loadSubscriptions(ctx: ConnectionContext): Promise<SubInfo[]> {
 
 function levelSeries(subs: SubInfo[], w: Window, pick: (s: SubInfo) => number): { series: SeriesPoint[]; previous: number } {
   const at = (t: Date) => Math.round(subs.filter((s) => s.start <= t && (s.end === null || s.end > t)).reduce((a, s) => a + pick(s), 0) * 100) / 100;
-  const starts = buckets(w);
-  const series = starts.map((d, i) => ({ t: toKey(d), v: at(i === starts.length - 1 ? addDays(w.to, 1) : nextBucket(d, w.granularity)) }));
-  return { series, previous: at(w.from) };
+  const series = levelInstants(w).map(({ t, at: when }) => ({ t, v: at(when) }));
+  return { series, previous: series[0]?.v ?? at(w.from) };
 }
 
 export const lemonsqueezy: ServerProvider = {
@@ -135,11 +134,12 @@ export const lemonsqueezy: ServerProvider = {
     }
 
     if (req.metric === "mrr" || req.metric === "subscriptions") {
+      const lw = levelWindow(w);
       const subs = await loadSubscriptions(ctx);
       if (req.metric === "mrr") {
         const current = Math.round(subs.filter((s) => s.active).reduce((a, s) => a + s.monthly, 0) * 100) / 100;
-        const { series, previous } = levelSeries(subs, w, (s) => s.monthly);
-        return baseResult(w, {
+        const { series, previous } = levelSeries(subs, lw, (s) => s.monthly);
+        return baseResult(lw, {
           value: current,
           previous,
           series: series.map((p, i, arr) => (i === arr.length - 1 ? { ...p, v: current } : p)),
@@ -147,16 +147,16 @@ export const lemonsqueezy: ServerProvider = {
           note: "History is reconstructed from subscription start and end dates.",
         });
       }
-      const { series, previous } = levelSeries(subs, w, () => 1);
-      return baseResult(w, { value: subs.filter((s) => s.active).length, previous, series });
+      const { series, previous } = levelSeries(subs, lw, () => 1);
+      return baseResult(lw, { value: subs.filter((s) => s.active).length, previous, series });
     }
 
     if (req.metric === "customers") {
+      const lw = levelWindow(w);
       const { items, total } = await list<CustomerAttrs>(ctx, "/customers");
       const dates = items.map((c) => new Date(c.attributes.created_at));
-      const series = cumulativeLevel(dates, total, w);
-      const inWindow = dates.filter((d) => d >= w.from).length;
-      return baseResult(w, { value: total, previous: total - inWindow, series });
+      const series = cumulativeLevel(dates, total, lw);
+      return baseResult(lw, { value: total, previous: series[0]?.v ?? null, series });
     }
 
     throw new ProviderError(`Unknown Lemon Squeezy metric "${req.metric}".`);

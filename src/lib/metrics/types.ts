@@ -4,11 +4,16 @@
 
 export type Period = "7d" | "30d" | "90d" | "12m";
 
-export const PERIODS: { id: Period; label: string; days: number; granularity: Granularity; short: string }[] = [
-  { id: "7d", label: "Last 7 days", short: "7 days", days: 7, granularity: "day" },
-  { id: "30d", label: "Last 30 days", short: "30 days", days: 30, granularity: "day" },
-  { id: "90d", label: "Last 90 days", short: "90 days", days: 90, granularity: "week" },
-  { id: "12m", label: "Last 12 months", short: "12 months", days: 365, granularity: "month" },
+/**
+ * `granularity` sizes the buckets flow metrics are summed into (bars);
+ * `levelGranularity` is the finer spacing level metrics are sampled at, so a
+ * curve follows the real shape of the growth instead of a dozen coarse points.
+ */
+export const PERIODS: { id: Period; label: string; days: number; granularity: Granularity; levelGranularity: Granularity; short: string }[] = [
+  { id: "7d", label: "Last 7 days", short: "7 days", days: 7, granularity: "day", levelGranularity: "day" },
+  { id: "30d", label: "Last 30 days", short: "30 days", days: 30, granularity: "day", levelGranularity: "day" },
+  { id: "90d", label: "Last 90 days", short: "90 days", days: 90, granularity: "week", levelGranularity: "day" },
+  { id: "12m", label: "Last 12 months", short: "12 months", days: 365, granularity: "month", levelGranularity: "week" },
 ];
 
 export type Granularity = "day" | "week" | "month";
@@ -22,7 +27,11 @@ export type MetricFormat = "number" | "currency" | "percent";
 export type MetricKind = "level" | "flow";
 
 export interface SeriesPoint {
-  /** ISO date, YYYY-MM-DD (bucket start) */
+  /**
+   * ISO date, YYYY-MM-DD. Flow series: the bucket start (v = sum over the
+   * bucket). Level series: the sample day (v = the level at the start of that
+   * day); the last point is the live value.
+   */
   t: string;
   v: number;
 }

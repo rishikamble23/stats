@@ -1,5 +1,5 @@
 import "server-only";
-import { addDays, bucketFlow, buckets, nextBucket, periodWindow, previousWindow, sumInWindow, toKey, type DatedValue, type Window } from "../metrics/series";
+import { addDays, bucketFlow, buckets, levelFromAdditions, levelWindow, periodWindow, previousWindow, sumInWindow, toKey, type DatedValue, type Window } from "../metrics/series";
 import type { MetricResult, SeriesPoint } from "../metrics/types";
 import { baseResult, ProviderError, requestJson, requireParam, requireSecret, type ConnectionContext, type ServerProvider } from "./base";
 
@@ -117,21 +117,15 @@ export const posthog: ServerProvider = {
     }
 
     if (req.metric === "users") {
+      const lw = levelWindow(w);
       const [totalRows, newRows] = await Promise.all([
         hogql(ctx, "SELECT count() FROM persons"),
-        hogql(ctx, `SELECT toStartOfDay(created_at) AS d, count() FROM persons WHERE created_at >= ${sqlDate(w.from)} GROUP BY d ORDER BY d`),
+        hogql(ctx, `SELECT toStartOfDay(created_at) AS d, count() FROM persons WHERE created_at >= ${sqlDate(lw.from)} GROUP BY d ORDER BY d`),
       ]);
       const total = Number(totalRows[0]?.[0] ?? 0);
-      const daily = rowsToDated(newRows);
-      const starts = buckets(w);
-      // cumulative: total minus everyone created after each bucket end
-      const series = starts.map((d, i) => {
-        const end = i === starts.length - 1 ? tomorrow : nextBucket(d, w.granularity);
-        const after = daily.filter((x) => x.date >= end).reduce((a, b) => a + b.value, 0);
-        return { t: toKey(d), v: total - after };
-      });
-      const createdInWindow = daily.filter((x) => x.date >= w.from).reduce((a, b) => a + b.value, 0);
-      return baseResult(w, { value: total, previous: total - createdInWindow, series });
+      // cumulative: the total minus everyone created on or after each sample day
+      const series = levelFromAdditions(rowsToDated(newRows), total, lw);
+      return baseResult(lw, { value: total, previous: series[0]?.v ?? null, series });
     }
 
     throw new ProviderError(`Unknown PostHog metric "${req.metric}".`);

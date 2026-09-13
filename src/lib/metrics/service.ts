@@ -4,7 +4,7 @@ import { decryptJson } from "../crypto";
 import { connection, db, ensureMigrated, metricCache } from "../db";
 import { getServerProvider, isProviderError, ProviderError } from "../providers";
 import { getMetricDef, getProvider } from "./catalog";
-import { fillDaily, hashString, periodWindow, toKey, valueAt } from "./series";
+import { fillDaily, hashString, levelWindow, periodWindow, toKey } from "./series";
 import type { MetricResult, Period, SeriesPoint } from "./types";
 
 const CACHE_TTL_MS = 20 * 60 * 1000;
@@ -95,14 +95,16 @@ async function applySnapshots(connectionId: string, key: string, result: MetricR
   log.sort((a, b) => a.t.localeCompare(b.t));
   await upsertCache(connectionId, key, log);
 
-  const w = periodWindow(period);
-  const inWindow = log.filter((p) => p.t >= toKey(w.from));
-  const earlier = log.filter((p) => p.t < toKey(w.from));
   if (log.length < 2) return result; // nothing to chart yet
-  const series = fillDaily(log, w, "last");
-  const curve = log.map((p) => ({ date: new Date(`${p.t}T00:00:00Z`), value: p.v }));
-  const previous = earlier.length ? Math.round(valueAt(curve, w.from)) : inWindow[0]?.v ?? null;
-  return { ...result, series, previous, note: result.note ?? "History is recorded each time you refresh." };
+  const lw = levelWindow(periodWindow(period));
+  const series = fillDaily(log, lw, "last");
+  return {
+    ...result,
+    series,
+    previous: series[0]?.v ?? null,
+    granularity: lw.granularity,
+    note: result.note ?? "History is recorded each time you refresh.",
+  };
 }
 
 async function upsertCache(connectionId: string, cacheKey: string, data: unknown): Promise<void> {

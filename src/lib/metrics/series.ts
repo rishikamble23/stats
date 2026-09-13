@@ -52,12 +52,18 @@ export interface Window {
   period: Period;
 }
 
-/** The window a period covers, ending today (UTC). */
+/** The window a period covers, ending today (UTC), bucketed for flow metrics (sums). */
 export function periodWindow(period: Period, now = new Date()): Window {
   const def = PERIODS.find((p) => p.id === period) ?? PERIODS[1];
   const to = startOfUtcDay(now);
   const from = addDays(to, -(def.days - 1));
   return { from, to, days: def.days, granularity: def.granularity, period: def.id };
+}
+
+/** The same window at the finer spacing level metrics (curves) are sampled at. */
+export function levelWindow(w: Window): Window {
+  const def = PERIODS.find((p) => p.id === w.period) ?? PERIODS[1];
+  return { ...w, granularity: def.levelGranularity };
 }
 
 /** The window immediately before `w` with the same length. */
@@ -74,6 +80,29 @@ export function buckets(w: Window): Date[] {
     cur = nextBucket(cur, w.granularity);
   }
   return out;
+}
+
+export interface Instant {
+  /** Series key for the sample (YYYY-MM-DD). */
+  t: string;
+  /** The moment the level is read. */
+  at: Date;
+}
+
+/**
+ * Where a level series is sampled: the start of every bucket in the window,
+ * except that the first sample is clamped to the window start (so the curve
+ * begins at the value the change badge compares against) and the last one is
+ * taken at the end of the window, i.e. it is the live value.
+ */
+export function levelInstants(w: Window): Instant[] {
+  const starts = buckets(w);
+  const last = starts.length - 1;
+  return starts.map((d, i) => {
+    if (i === last) return { t: toKey(w.to), at: addDays(w.to, 1) };
+    const at = d < w.from ? w.from : d;
+    return { t: toKey(at), at };
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -108,78 +137,51 @@ export function sumInWindow(items: DatedValue[], w: Window): number {
 }
 
 /**
- * Build a cumulative "level" series from event dates (e.g. star events,
- * customer sign-ups). `total` is the true current total; events may only be a
- * sample, so the last point is pinned to `total`.
+ * Level series from the current total and dated additions (stars per day,
+ * customer sign-ups, ...). The level at each instant is the total minus every
+ * addition at or after it, so the curve always ends at `total`, and additions
+ * from before the window (or that were never fetched) fall into the offset.
  */
-export function cumulativeLevel(events: Date[], total: number, w: Window): SeriesPoint[] {
-  const sorted = [...events].sort((a, b) => a.getTime() - b.getTime());
-  const starts = buckets(w);
-  const out: SeriesPoint[] = [];
+export function levelFromAdditions(additions: DatedValue[], total: number, w: Window): SeriesPoint[] {
+  const sorted = [...additions].sort((a, b) => a.date.getTime() - b.date.getTime());
   let idx = 0;
-  let count = 0;
-  for (let i = 0; i < starts.length; i++) {
-    const end = i === starts.length - 1 ? addDays(w.to, 1) : starts[i + 1];
-    while (idx < sorted.length && sorted[idx] < end) {
+  let before = 0;
+  const cumulative = levelInstants(w).map(({ t, at }) => {
+    while (idx < sorted.length && sorted[idx].date < at) {
+      before += sorted[idx].value;
       idx++;
-      count++;
     }
-    out.push({ t: toKey(starts[i]), v: count });
-  }
-  // Events before the window that we didn't see: offset so the end matches total.
-  const offset = total - (out.at(-1)?.v ?? 0);
-  return out.map((p) => ({ t: p.t, v: p.v + offset }));
-}
-
-/**
- * Turn an irregular cumulative curve (points of {date, total}) into a bucketed
- * series over the window by linear interpolation. Used for sampled star history.
- */
-export function resampleCumulative(curve: DatedValue[], w: Window): SeriesPoint[] {
-  const pts = [...curve].sort((a, b) => a.date.getTime() - b.date.getTime());
-  if (!pts.length) return [];
-  const starts = buckets(w);
-  return starts.map((d, i) => {
-    const at = i === starts.length - 1 ? addDays(w.to, 1) : nextBucket(d, w.granularity);
-    return { t: toKey(d), v: Math.round(valueAt(pts, at)) };
+    return { t, v: before };
   });
+  const offset = total - (cumulative.at(-1)?.v ?? 0);
+  return cumulative.map((p) => ({ t: p.t, v: round(p.v + offset) }));
 }
 
-/** Linear interpolation of a cumulative curve at a point in time. */
-export function valueAt(sorted: DatedValue[], at: Date): number {
-  if (!sorted.length) return 0;
-  if (at <= sorted[0].date) return sorted[0].value;
-  const last = sorted[sorted.length - 1];
-  if (at >= last.date) return last.value;
-  let lo = 0;
-  let hi = sorted.length - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (sorted[mid].date <= at) lo = mid;
-    else hi = mid;
-  }
-  const a = sorted[lo];
-  const b = sorted[hi];
-  const span = b.date.getTime() - a.date.getTime();
-  if (span <= 0) return b.value;
-  const f = (at.getTime() - a.date.getTime()) / span;
-  return a.value + (b.value - a.value) * f;
+/** Level series from event dates where every event adds one (customers, subscribers). */
+export function cumulativeLevel(events: Date[], total: number, w: Window): SeriesPoint[] {
+  return levelFromAdditions(
+    events.map((date) => ({ date, value: 1 })),
+    total,
+    w,
+  );
 }
 
 /** Fill a daily series (possibly with gaps) into the window's buckets. */
 export function fillDaily(points: SeriesPoint[], w: Window, mode: "sum" | "last" = "sum"): SeriesPoint[] {
   const items: DatedValue[] = points.map((p) => ({ date: fromKey(p.t), value: p.v }));
   if (mode === "sum") return bucketFlow(items, w);
-  // "last": carry the latest value in each bucket (level metrics reported daily)
-  const starts = buckets(w);
-  const byBucket = new Map<string, number>();
+  // "last": a level reported once a day → the latest report on or before each
+  // sample. Before the first report there is no history, so hold that value
+  // flat instead of starting the curve at zero.
   const sorted = items.sort((a, b) => a.date.getTime() - b.date.getTime());
-  for (const it of sorted) byBucket.set(toKey(bucketStart(it.date, w.granularity)), it.value);
-  let carry = sorted.find((s) => s.date < w.from)?.value ?? 0;
-  return starts.map((d) => {
-    const k = toKey(d);
-    if (byBucket.has(k)) carry = byBucket.get(k)!;
-    return { t: k, v: carry };
+  let idx = 0;
+  let carry = sorted[0]?.value ?? 0;
+  return levelInstants(w).map(({ t, at }) => {
+    while (idx < sorted.length && sorted[idx].date <= at) {
+      carry = sorted[idx].value;
+      idx++;
+    }
+    return { t, v: carry };
   });
 }
 

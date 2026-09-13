@@ -1,4 +1,4 @@
-import { buckets, periodWindow, toKey } from "./series";
+import { buckets, levelInstants, levelWindow, periodWindow, toKey } from "./series";
 import type { ClientConnection, MetricDef, MetricResult, Period, ProviderMeta } from "./types";
 
 /**
@@ -69,19 +69,20 @@ export function demoMetric(metric: string, period: Period, now = new Date()): Me
   const def = DEMO_PROVIDER.metrics.find((m) => m.key === metric) as MetricDef;
   const shape = SHAPES[metric] ?? SHAPES.active_users;
   const w = periodWindow(period, now);
-  const starts = buckets(w);
-  const rand = mulberry32(shape.seed * 1000 + starts.length);
-  const n = starts.length;
 
   if (def.kind === "level") {
     // smooth ease-in growth curve from start -> value with gentle noise
+    const lw = levelWindow(w);
+    const instants = levelInstants(lw);
+    const n = instants.length;
+    const rand = mulberry32(shape.seed * 1000 + n);
     const startValue = shape.value * (1 - shape.growth);
-    const series = starts.map((d, i) => {
+    const series = instants.map(({ t }, i) => {
       const f = n === 1 ? 1 : i / (n - 1);
       const eased = f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2;
-      const wobble = (rand() - 0.5) * shape.noise * shape.value * (1 - f) ;
+      const wobble = (rand() - 0.5) * shape.noise * shape.value * (1 - f);
       const v = startValue + (shape.value - startValue) * eased + wobble;
-      return { t: toKey(d), v: Math.round(i === n - 1 ? shape.value : Math.max(0, v)) };
+      return { t, v: Math.round(i === n - 1 ? shape.value : Math.max(0, v)) };
     });
     return {
       value: shape.value,
@@ -89,12 +90,15 @@ export function demoMetric(metric: string, period: Period, now = new Date()): Me
       series,
       currency: shape.currency,
       period: { from: toKey(w.from), to: toKey(w.to), days: w.days },
-      granularity: w.granularity,
+      granularity: lw.granularity,
       fetchedAt: now.toISOString(),
     };
   }
 
   // flow: bucket values that trend upward with weekly rhythm and noise
+  const starts = buckets(w);
+  const n = starts.length;
+  const rand = mulberry32(shape.seed * 1000 + n);
   const perBucket = shape.value / n;
   const series = starts.map((d, i) => {
     const f = n === 1 ? 1 : i / (n - 1);
