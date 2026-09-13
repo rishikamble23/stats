@@ -1,4 +1,6 @@
-import { forwardRef, type CSSProperties } from "react";
+"use client";
+import { forwardRef, useState, type CSSProperties } from "react";
+import { resolveIdentity, type CardIdentity } from "@/lib/cards/resolve";
 import { getTheme, type Theme } from "@/lib/cards/themes";
 import { SIZES, type CardConfig, type CardSlot } from "@/lib/cards/types";
 import { describeChange, formatDate, formatValue, niceMilestone, type ChangeInfo } from "@/lib/metrics/format";
@@ -19,6 +21,7 @@ export interface CardProps {
 export const Card = forwardRef<HTMLDivElement, CardProps>(function Card({ config, slots, id = "card", className }, ref) {
   const theme = getTheme(config.theme);
   const size = SIZES[config.size];
+  const identity = resolveIdentity(config, slots);
   const vars = {
     "--c-fg": theme.fg,
     "--c-muted": theme.muted,
@@ -48,11 +51,11 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(function Card({ config
     >
       {theme.blobs && <Blobs theme={theme} size={config.size} />}
       {config.template === "milestone" ? (
-        <Milestone config={config} slot={slots[0]} theme={theme} id={id} />
+        <Milestone config={config} slot={slots[0]} theme={theme} identity={identity} id={id} />
       ) : config.template === "stack" ? (
-        <Stack config={config} slots={slots} theme={theme} id={id} />
+        <Stack config={config} slots={slots} theme={theme} identity={identity} id={id} />
       ) : (
-        <Single config={config} slot={slots[0]} theme={theme} id={id} />
+        <Single config={config} slot={slots[0]} theme={theme} identity={identity} id={id} />
       )}
     </div>
   );
@@ -94,39 +97,45 @@ function Blobs({ theme, size }: { theme: Theme; size: CardConfig["size"] }) {
   );
 }
 
-function Header({ config, theme, compact = false }: { config: CardConfig; theme: Theme; compact?: boolean }) {
-  const hasName = Boolean(config.appName || config.emoji);
+function Header({ config, theme, identity, compact = false }: { config: CardConfig; theme: Theme; identity: CardIdentity; compact?: boolean }) {
+  const hasName = Boolean(identity.name || identity.logoUrl);
   const date = config.showDate ? formatDate(new Date()) : null;
   if (!hasName && !date) return null;
+  const box = compact ? 32 : 40;
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", minHeight: compact ? 32 : 40 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", minHeight: box }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        {config.emoji && (
-          <span
-            style={{
-              width: compact ? 32 : 40,
-              height: compact ? 32 : 40,
-              borderRadius: "40%",
-              background: theme.surface,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: compact ? 17 : 21,
-              lineHeight: 1,
-              flexShrink: 0,
-            }}
-          >
-            {config.emoji}
-          </span>
-        )}
-        {config.appName && (
+        {identity.logoUrl && <Logo key={identity.logoUrl} src={identity.logoUrl} size={box} background={theme.surface} />}
+        {identity.name && (
           <span style={{ fontWeight: 800, fontSize: compact ? 16 : 19, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {config.appName}
+            {identity.name}
           </span>
         )}
       </div>
       {date && <Pill theme={theme}>{date}</Pill>}
     </div>
+  );
+}
+
+/**
+ * The app/repo logo. A plain <img> (not next/image) so html-to-image can inline
+ * it; it is keyed by src by the caller, and hides itself when the image fails
+ * so a bad URL never leaves a broken-image icon on the card.
+ */
+function Logo({ src, size, background }: { src: string; size: number; background: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      crossOrigin="anonymous"
+      width={size}
+      height={size}
+      onError={() => setFailed(true)}
+      style={{ width: size, height: size, borderRadius: "30%", objectFit: "cover", background, flexShrink: 0, display: "block" }}
+    />
   );
 }
 
@@ -208,7 +217,7 @@ function seriesValues(slot: CardSlot | undefined): number[] {
 /* Single                                                               */
 /* ------------------------------------------------------------------ */
 
-function Single({ config, slot, theme, id }: { config: CardConfig; slot?: CardSlot; theme: Theme; id: string }) {
+function Single({ config, slot, theme, identity, id }: { config: CardConfig; slot?: CardSlot; theme: Theme; identity: CardIdentity; id: string }) {
   const wide = config.size === "wide";
   const pad = wide ? 36 : 44;
   const size = SIZES[config.size];
@@ -251,7 +260,7 @@ function Single({ config, slot, theme, id }: { config: CardConfig; slot?: CardSl
 
   return (
     <div style={{ position: "relative", display: "flex", flexDirection: "column", flex: 1, padding: pad, gap: 18, minHeight: 0 }}>
-      <Header config={config} theme={theme} compact={wide} />
+      <Header config={config} theme={theme} identity={identity} compact={wide} />
       {wide ? (
         <div style={{ display: "flex", alignItems: "center", gap: 24, flex: 1, minHeight: 0 }}>
           <div style={{ flex: "1 1 55%", minWidth: 0 }}>{body}</div>
@@ -272,7 +281,7 @@ function Single({ config, slot, theme, id }: { config: CardConfig; slot?: CardSl
 /* Stack                                                                */
 /* ------------------------------------------------------------------ */
 
-function Stack({ config, slots, theme, id }: { config: CardConfig; slots: CardSlot[]; theme: Theme; id: string }) {
+function Stack({ config, slots, theme, identity, id }: { config: CardConfig; slots: CardSlot[]; theme: Theme; identity: CardIdentity; id: string }) {
   const wide = config.size === "wide";
   const pad = wide ? 32 : 40;
   const size = SIZES[config.size];
@@ -281,14 +290,14 @@ function Stack({ config, slots, theme, id }: { config: CardConfig; slots: CardSl
   const rows = Math.ceil(n / cols);
   const gap = 14;
   const tileW = (size.w - pad * 2 - gap * (cols - 1)) / cols;
-  const headerH = config.appName || config.emoji || config.showDate ? (wide ? 32 : 40) + 18 : 0;
+  const headerH = identity.name || identity.logoUrl || config.showDate ? (wide ? 32 : 40) + 18 : 0;
   const footerH = config.caption || config.showWatermark ? 16 + 18 : 0;
   const tileH = (size.h - pad * 2 - headerH - footerH - gap * (rows - 1)) / rows;
   const showSpark = config.showChart && tileH >= 120;
 
   return (
     <div style={{ position: "relative", display: "flex", flexDirection: "column", flex: 1, padding: pad, gap: 18 }}>
-      <Header config={config} theme={theme} compact={wide} />
+      <Header config={config} theme={theme} identity={identity} compact={wide} />
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap, flex: 1 }}>
         {slots.map((slot, i) => {
           const result = slot.result;
@@ -370,7 +379,7 @@ const CONFETTI = [
   [72, 24, 5, 2],
 ] as const;
 
-function Milestone({ config, slot, theme, id }: { config: CardConfig; slot?: CardSlot; theme: Theme; id: string }) {
+function Milestone({ config, slot, theme, identity, id }: { config: CardConfig; slot?: CardSlot; theme: Theme; identity: CardIdentity; id: string }) {
   const wide = config.size === "wide";
   const pad = wide ? 36 : 44;
   const result = slot?.result;
@@ -399,10 +408,10 @@ function Milestone({ config, slot, theme, id }: { config: CardConfig; slot?: Car
           }}
         />
       ))}
-      <Header config={config} theme={theme} compact={wide} />
+      <Header config={config} theme={theme} identity={identity} compact={wide} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", gap: wide ? 6 : 10, position: "relative" }}>
         <div style={{ fontSize: wide ? 40 : 56, lineHeight: 1 }}>{config.emoji || "🎉"}</div>
-        <div style={{ fontSize: wide ? 15 : 18, fontWeight: 700, color: theme.muted }}>{config.appName ? `${config.appName} just hit` : "We just hit"}</div>
+        <div style={{ fontSize: wide ? 15 : 18, fontWeight: 700, color: theme.muted }}>{identity.name ? `${identity.name} just hit` : "We just hit"}</div>
         {slot?.loading && !result ? (
           <Skeleton w={260} h={wide ? 64 : 90} theme={theme} r={20} />
         ) : slot?.error ? (

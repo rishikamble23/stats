@@ -2,6 +2,7 @@ import Link from "next/link";
 import { DemoCard, HeroCards } from "@/components/landing/HeroCards";
 import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui";
+import { letterLogo } from "@/lib/cards/logo";
 import { PROVIDERS } from "@/lib/metrics/catalog";
 import { getSession } from "@/lib/session";
 
@@ -60,7 +61,7 @@ export default async function Home() {
           <div className="grid gap-4 sm:grid-cols-3">
             {[
               { n: "1", emoji: "🔌", title: "Connect once", body: "Paste a read-only API key or sign in with GitHub. Keys are encrypted and never leave the server." },
-              { n: "2", emoji: "🎨", title: "Pick a metric & vibe", body: "MRR, actives, stars, downloads… choose a theme, a size and a sticker. Save the card." },
+              { n: "2", emoji: "🎨", title: "Pick a metric & vibe", body: "MRR, actives, stars, downloads… choose a theme, a size and a logo. Save the card." },
               { n: "3", emoji: "📮", title: "Download, forever", body: "Come back any week: the numbers refresh themselves. One click gives you a crisp PNG for X, LinkedIn or Instagram." },
             ].map((s) => (
               <div key={s.n} className="rounded-[28px] border border-line bg-white/75 p-6 shadow-soft backdrop-blur">
@@ -83,10 +84,10 @@ export default async function Home() {
           <div className="grid items-start gap-6 md:grid-cols-3">
             <DemoCard
               id="g1"
-              config={{ template: "stack", theme: "sky", appName: "Loopnote", emoji: "🌱", metrics: [{ connectionId: "demo", metric: "mrr" }, { connectionId: "demo", metric: "active_users" }, { connectionId: "demo", metric: "signups" }, { connectionId: "demo", metric: "customers" }] }}
+              config={{ template: "stack", theme: "sky", appName: "Loopnote", logoUrl: letterLogo("L", "#10B981"), metrics: [{ connectionId: "demo", metric: "mrr" }, { connectionId: "demo", metric: "active_users" }, { connectionId: "demo", metric: "signups" }, { connectionId: "demo", metric: "customers" }] }}
             />
-            <DemoCard id="g2" config={{ theme: "lemon", appName: "npm: tinyfetch", emoji: "📦", metrics: [{ connectionId: "demo", metric: "downloads" }], chartStyle: "bars", caption: "weekly downloads, last 30 days" }} />
-            <DemoCard id="g3" config={{ template: "milestone", theme: "bubblegum", appName: "Pixelfolio", emoji: "🎉", metrics: [{ connectionId: "demo", metric: "customers" }], milestone: { value: 300, message: "300 people pay for something I made?!" } }} />
+            <DemoCard id="g2" config={{ theme: "lemon", appName: "tinyfetch", logoUrl: letterLogo("n", "#CB3837"), metrics: [{ connectionId: "demo", metric: "downloads" }], chartStyle: "bars", caption: "npm downloads, last 30 days" }} />
+            <DemoCard id="g3" config={{ template: "milestone", theme: "bubblegum", appName: "Pixelfolio", logoUrl: letterLogo("P", "#F97316"), emoji: "🎉", metrics: [{ connectionId: "demo", metric: "customers" }], milestone: { value: 300, message: "300 people pay for something I made?!" } }} />
           </div>
         </section>
 

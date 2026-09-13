@@ -1,5 +1,6 @@
 "use client";
 import { useMemo } from "react";
+import { letterLogo } from "@/lib/cards/logo";
 import { resolveSlots, type MetricState } from "@/lib/cards/resolve";
 import { defaultCardConfig, type CardConfig } from "@/lib/cards/types";
 import { demoMetric } from "@/lib/metrics/demo";
@@ -24,19 +25,19 @@ export function HeroCards() {
       <div className="absolute left-0 top-6 w-[62%] animate-float-slow" style={{ ["--rot" as string]: "-4deg" }}>
         <DemoCard
           id="hero-a"
-          config={{ metrics: [{ connectionId: "demo", metric: "mrr" }], theme: "peach", appName: "Pixelfolio", emoji: "🎨", caption: "3 months since launch" }}
+          config={{ metrics: [{ connectionId: "demo", metric: "mrr" }], theme: "peach", appName: "Pixelfolio", logoUrl: letterLogo("P", "#F97316"), caption: "3 months since launch" }}
         />
       </div>
       <div className="absolute right-0 top-0 w-[58%] animate-float" style={{ ["--rot" as string]: "5deg", animationDelay: "-2s" }}>
         <DemoCard
           id="hero-b"
-          config={{ metrics: [{ connectionId: "demo", metric: "stars" }], theme: "midnight", appName: "tinybase", emoji: "⭐", template: "milestone", milestone: { value: 2500, message: "Thank you, open source friends 💛" } }}
+          config={{ metrics: [{ connectionId: "demo", metric: "stars" }], theme: "midnight", appName: "tinybase", logoUrl: letterLogo("t", "#F5C542", "#1c1917"), emoji: "⭐", template: "milestone", milestone: { value: 2500, message: "Thank you, open source friends 💛" } }}
         />
       </div>
       <div className="absolute bottom-0 left-[18%] w-[64%] animate-float" style={{ ["--rot" as string]: "-1.5deg", animationDelay: "-4s" }}>
         <DemoCard
           id="hero-c"
-          config={{ size: "wide", metrics: [{ connectionId: "demo", metric: "active_users" }], theme: "mint", appName: "Loopnote", emoji: "🌱", chartStyle: "area" }}
+          config={{ size: "wide", metrics: [{ connectionId: "demo", metric: "active_users" }], theme: "mint", appName: "Loopnote", logoUrl: letterLogo("L", "#10B981"), chartStyle: "area" }}
         />
       </div>
     </div>
