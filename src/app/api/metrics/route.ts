@@ -4,6 +4,9 @@ import { fetchMetric } from "@/lib/metrics/service";
 import { isProviderError } from "@/lib/providers";
 import { requireUser, UnauthorizedError } from "@/lib/session";
 
+// Star history and Stripe pagination can take a while on big accounts.
+export const maxDuration = 60;
+
 const querySchema = z.object({
   connectionId: z.string().min(1),
   metric: z.string().min(1),

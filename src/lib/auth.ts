@@ -10,9 +10,22 @@ const githubClientSecret = process.env.GITHUB_CLIENT_SECRET;
 /** True when "Sign in with GitHub" is configured. */
 export const githubOAuthEnabled = Boolean(githubClientId && githubClientSecret);
 
+/**
+ * Public origin of the app. Explicit BETTER_AUTH_URL wins; on Vercel we fall
+ * back to the production domain (or the preview deployment's own URL).
+ */
+export function resolveBaseUrl(): string {
+  if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL;
+  if (process.env.VERCEL_ENV === "production" && process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return "http://localhost:3000";
+}
+
 export const auth = betterAuth({
   appName: "howitsgoing",
-  baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
+  baseURL: resolveBaseUrl(),
   secret: process.env.BETTER_AUTH_SECRET,
   database: drizzleAdapter(db, { provider: "sqlite", schema }),
   emailAndPassword: {

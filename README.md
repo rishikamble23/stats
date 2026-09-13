@@ -61,9 +61,31 @@ All variables are optional in development. See `.env.example`.
 | `npm run db:generate` | Generate a migration after editing the schema. |
 | `npm run db:studio` | Browse the database with Drizzle Studio.      |
 
-## Deploying
+## Deploying to Vercel + Turso
 
-Any Node host works. For Vercel/serverless, point `DATABASE_URL` at Turso (free tier is plenty), set `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`, `ENCRYPTION_KEY`, and optionally the GitHub OAuth pair.
+Any Node host works; this is the zero-ops path.
+
+1. **Create the project**: `npx vercel link --yes --project howitsgoing` (or import the repo in the Vercel dashboard).
+2. **Database**: install the Turso marketplace integration and connect it to the project. It injects `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, which the app reads automatically. In production the app uses the pure-fetch libSQL client, so no native binaries are involved.
+   ```bash
+   npx vercel integration add tursocloud/database -n howitsgoing-db --plan starter -e production -e preview --no-env-pull
+   ```
+   Any other libSQL/Turso database works too: set `DATABASE_URL` + `DATABASE_AUTH_TOKEN` instead.
+3. **Secrets** (production and preview):
+   ```bash
+   openssl rand -base64 32 | npx vercel env add BETTER_AUTH_SECRET production
+   openssl rand -hex 32    | npx vercel env add ENCRYPTION_KEY production
+   ```
+4. **GitHub sign-in** (optional): create an OAuth app at https://github.com/settings/developers with homepage `https://<your-domain>` and callback `https://<your-domain>/api/auth/callback/github`, then add `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` the same way.
+5. **Migrate & deploy**: migrations also run lazily on first request, but running them once up front is cleaner:
+   ```bash
+   npx vercel env pull .env.production.local --environment production
+   set -a; source .env.production.local; set +a
+   DATABASE_URL="$TURSO_DATABASE_URL" DATABASE_AUTH_TOKEN="$TURSO_AUTH_TOKEN" npx drizzle-kit migrate
+   npx vercel deploy --prod
+   ```
+
+`BETTER_AUTH_URL` is derived from Vercel's production domain when unset. Set it explicitly if you attach a custom domain and want auth callbacks pinned to it.
 
 ## License
 

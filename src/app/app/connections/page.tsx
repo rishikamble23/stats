@@ -6,6 +6,8 @@ import { listConnections } from "@/lib/queries";
 import { requireSession } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Connections" };
+// Verifying credentials calls third-party APIs from the server action on this route.
+export const maxDuration = 60;
 
 export default async function ConnectionsPage({ searchParams }: PageProps<"/app/connections">) {
   const session = await requireSession();

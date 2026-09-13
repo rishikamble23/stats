@@ -4,6 +4,8 @@ import { connection, db, ensureMigrated } from "@/lib/db";
 import { listUserRepos } from "@/lib/providers/github";
 import { requireUser, UnauthorizedError } from "@/lib/session";
 
+export const maxDuration = 30;
+
 /** Repos for the autocomplete in the studio (uses the GitHub connection token or the GitHub login). */
 export async function GET() {
   try {
