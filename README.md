@@ -87,6 +87,10 @@ Any Node host works; this is the zero-ops path.
 
 `BETTER_AUTH_URL` is derived from Vercel's production domain when unset. Set it explicitly if you attach a custom domain and want auth callbacks pinned to it.
 
+## Contributing
+
+Contributions are welcome, new integrations, themes and templates especially. [CONTRIBUTING.md](CONTRIBUTING.md) covers local setup and has step-by-step guides for adding a provider or a theme. Then pick something from the [good first issues](https://github.com/suryaprakashpandey/stats/labels/good%20first%20issue).
+
 ## License
 
 MIT
