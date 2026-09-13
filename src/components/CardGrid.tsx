@@ -1,8 +1,8 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
-import { deleteCard } from "@/lib/actions/cards";
+import { useRef, useState, useTransition } from "react";
+import { deleteCard, duplicateCard } from "@/lib/actions/cards";
 import { downloadBlob, renderCardPng, slugify } from "@/lib/cards/export";
 import { SIZES, type CardConfig } from "@/lib/cards/types";
 import type { ClientConnection } from "@/lib/metrics/types";
@@ -33,7 +33,25 @@ function CardTile({ card, connections }: { card: CardSummary; connections: Clien
   const { slots, loading, refresh } = useCardData(card.config, connections, { debounceMs: 0 });
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [duplicating, startDuplicate] = useTransition();
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const size = SIZES[card.config.size];
+
+  const duplicate = () => {
+    setDuplicateError(null);
+    startDuplicate(async () => {
+      try {
+        const result = await duplicateCard(card.id);
+        if (!result.ok) {
+          setDuplicateError(result.error);
+          return;
+        }
+        router.push(`/app/cards/${result.data.id}`);
+      } catch {
+        setDuplicateError("Couldn't duplicate this card. Please try again.");
+      }
+    });
+  };
 
   const download = async () => {
     if (!ref.current) return;
@@ -58,23 +76,27 @@ function CardTile({ card, connections }: { card: CardSummary; connections: Clien
       <Link href={`/app/cards/${card.id}`} className="block">
         <CardPreview ref={ref} config={card.config} slots={slots} id={`tile-${card.id}`} radius={20} />
       </Link>
-      <div className="mt-4 flex items-center justify-between gap-3">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-bold">{card.name}</div>
           <div className="text-xs text-ink/45">{loading ? "Fetching fresh numbers…" : `Fresh as of ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}</div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           <Button size="sm" onClick={download} loading={busy} disabled={loading}>
             ⬇︎ PNG
+          </Button>
+          <Button size="sm" variant="ghost" onClick={duplicate} loading={duplicating} disabled={removing}>
+            Duplicate
           </Button>
           <Button size="sm" variant="ghost" onClick={refresh} title="Refresh data">
             ↻
           </Button>
-          <Button size="sm" variant="ghost" onClick={remove} loading={removing} title="Delete">
+          <Button size="sm" variant="ghost" onClick={remove} loading={removing} disabled={duplicating} title="Delete">
             🗑
           </Button>
         </div>
       </div>
+      {duplicateError && <p role="alert" className="mt-2 text-sm font-semibold text-rose-600">{duplicateError}</p>}
     </div>
   );
 }
