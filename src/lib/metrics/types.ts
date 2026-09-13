@@ -36,9 +36,17 @@ export interface SeriesPoint {
   v: number;
 }
 
+/** What a metric is about, so a card can default its name and logo (a repo and its owner's avatar, a package name). */
+export interface MetricBrand {
+  name: string;
+  logoUrl?: string;
+}
+
 export interface MetricResult {
   /** Headline number. */
   value: number;
+  /** Default identity for cards built on this metric. */
+  brand?: MetricBrand;
   /** Comparison value (level: value at window start; flow: previous window sum). */
   previous: number | null;
   /** Chronological series over the requested period. May be empty. */

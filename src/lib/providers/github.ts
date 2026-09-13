@@ -61,9 +61,29 @@ function parseRepo(raw: string): string {
 }
 
 interface Repo {
+  name: string;
   full_name: string;
   stargazers_count: number;
   forks_count: number;
+  owner: { login: string; avatar_url: string };
+}
+
+interface GitHubUser {
+  login: string;
+  name: string | null;
+  followers: number;
+  avatar_url: string;
+}
+
+/** GitHub avatars take a size hint; 160px covers a 40px header logo exported at 2×. */
+function avatar(url: string): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.set("s", "160");
+    return u.toString();
+  } catch {
+    return url;
+  }
 }
 
 interface HistoryWeek {
@@ -115,28 +135,30 @@ export const github: ServerProvider = {
 
     if (req.metric === "followers") {
       const user = requireParam(req.params, "user", "username").replace(/^@/, "");
-      const data = await gh<{ followers: number }>(`/users/${encodeURIComponent(user)}`, token);
-      return baseResult(w, { value: data.followers, series: [] });
+      const data = await gh<GitHubUser>(`/users/${encodeURIComponent(user)}`, token);
+      return baseResult(w, { value: data.followers, series: [], brand: { name: data.name || data.login, logoUrl: avatar(data.avatar_url) } });
     }
 
     const repo = parseRepo(requireParam(req.params, "repo", "repository"));
     const info = await gh<Repo>(`/repos/${repo}`, token);
+    // Cards default to the repo's name and its owner's avatar as the logo.
+    const brand = { name: info.name, logoUrl: avatar(info.owner.avatar_url) };
 
     if (req.metric === "stars") {
       const lw = levelWindow(w);
       const perDay = await starsPerDay(repo, lw.from, token);
       const series = levelFromAdditions(perDay, info.stargazers_count, lw);
-      return baseResult(lw, { value: info.stargazers_count, previous: series[0]?.v ?? null, series });
+      return baseResult(lw, { value: info.stargazers_count, previous: series[0]?.v ?? null, series, brand });
     }
 
     if (req.metric === "forks") {
-      return baseResult(w, { value: info.forks_count, series: [] });
+      return baseResult(w, { value: info.forks_count, series: [], brand });
     }
 
     if (req.metric === "release_downloads") {
       const releases = await gh<{ assets: { download_count: number }[] }[]>(`/repos/${repo}/releases?per_page=100`, token);
       const total = releases.reduce((sum, r) => sum + r.assets.reduce((s, a) => s + (a.download_count ?? 0), 0), 0);
-      return baseResult(w, { value: total, series: [] });
+      return baseResult(w, { value: total, series: [], brand });
     }
 
     throw new ProviderError(`Unknown GitHub metric "${req.metric}".`);

@@ -42,6 +42,21 @@ export function resolveSlots(config: CardConfig, connections: ClientConnection[]
   });
 }
 
+export interface CardIdentity {
+  name: string;
+  logoUrl: string;
+}
+
+/**
+ * The name and logo the card shows: the user's overrides, otherwise what the
+ * data says (a repo's name and its owner's avatar, a package name).
+ */
+export function resolveIdentity(config: CardConfig, slots: CardSlot[]): CardIdentity {
+  const brand = slots.find((s) => s.result?.brand)?.result?.brand;
+  const logoUrl = config.showLogo === false ? "" : config.logoUrl || brand?.logoUrl || "";
+  return { name: config.appName || brand?.name || "", logoUrl };
+}
+
 /** True when every required param for the ref is filled in. */
 export function refIsComplete(ref: CardConfig["metrics"][number], connections: ClientConnection[]): boolean {
   const all = connections.some((c) => c.id === DEMO_CONNECTION.id) ? connections : [DEMO_CONNECTION, ...connections];

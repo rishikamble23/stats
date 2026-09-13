@@ -35,6 +35,7 @@ export const pypi: ServerProvider = {
       value: sumInWindow(items, w),
       previous: hasPrev ? sumInWindow(items, prev) : null,
       series: bucketFlow(items, w),
+      brand: { name: pkg },
       note: w.days > 180 ? "pypistats only keeps 180 days of history." : undefined,
     });
   },

@@ -23,10 +23,20 @@ export const cardConfigSchema = z.object({
   theme: z.string().default("peach"),
   period: z.enum(["7d", "30d", "90d", "12m"]).default("30d"),
   metrics: z.array(metricRefSchema).min(1).max(4),
+  /** Overrides the name from the data (e.g. the repo name). */
   appName: z.string().max(40).default(""),
+  /** The big emoji on milestone cards. */
   emoji: z.string().max(8).default(""),
-  /** Same-origin repo/brand icon (e.g. /api/repo-icon?repo=owner/name). Takes precedence over `emoji`. */
-  logoUrl: z.string().max(300).default(""),
+  /** Header logo: an image URL or an uploaded data URL. Empty = the logo from the data (e.g. the repo's GitHub avatar). */
+  logoUrl: z
+    .string()
+    .max(400_000)
+    .refine(
+      (s) => s === "" || /^https?:\/\//i.test(s) || /^data:image\//i.test(s) || /^\/[^/]/i.test(s),
+      "The logo must be an image URL.",
+    )
+    .default(""),
+  showLogo: z.boolean().default(true),
   headline: z.string().max(60).default(""),
   caption: z.string().max(140).default(""),
   showChart: z.boolean().default(true),

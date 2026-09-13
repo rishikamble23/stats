@@ -36,6 +36,7 @@ export const npm: ServerProvider = {
       value: sumInWindow(items, w),
       previous: sumInWindow(items, prev),
       series: bucketFlow(items, w),
+      brand: { name: pkg },
     });
   },
 };

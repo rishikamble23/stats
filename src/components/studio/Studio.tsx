@@ -1,15 +1,15 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { saveCard } from "@/lib/actions/cards";
 import { copyBlobToClipboard, downloadBlob, renderCard, renderCardPng, slugify, type CardExportFormat, type CardExportScale } from "@/lib/cards/export";
-import { providerForConnection } from "@/lib/cards/resolve";
+import { fileToLogoDataUrl } from "@/lib/cards/logo";
+import { providerForConnection, resolveIdentity } from "@/lib/cards/resolve";
 import { SIZES, defaultCardConfig, type CardConfig } from "@/lib/cards/types";
 import { DEMO_CONNECTION } from "@/lib/metrics/demo";
 import { describeChange, formatValue } from "@/lib/metrics/format";
 import { PERIODS, type ClientConnection, type MetricRef } from "@/lib/metrics/types";
-import { firstGithubRepo, repoIconUrl } from "@/lib/repo-icon";
 import { CardPreview } from "../card/CardPreview";
 import { useCardData } from "../card/useCardData";
 import { Button, Field, Input, Panel, Segmented, Select, Switch, cn } from "../ui";
@@ -42,11 +42,13 @@ export function Studio({ mode, connections, initial }: StudioProps) {
   const [exportScale, setExportScale] = useState<CardExportScale>(2);
   const [toast, setToast] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [customWords, setCustomWords] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const { slots, refresh, loading } = useCardData(config, connections);
   const size = SIZES[config.size];
-  const githubRepo = firstGithubRepo(config.metrics);
+  const identity = resolveIdentity(config, slots);
+  const brand = slots.find((s) => s.result?.brand)?.result?.brand;
+  const uploadedLogo = config.logoUrl.startsWith("data:");
+  const logoFile = useRef<HTMLInputElement>(null);
 
   const update = useCallback((patch: Partial<CardConfig>) => {
     setConfig((c) => ({ ...c, ...patch }));
@@ -75,7 +77,7 @@ export function Studio({ mode, connections, initial }: StudioProps) {
         : await renderCard(node, { ...dimensions, format: exportFormat, pixelRatio: exportScale });
       if (action === "download") {
         const primary = slots[0];
-        const fname = `${slugify(config.appName || "howitsgoing")}-${slugify(primary?.def.shortLabel ?? "card")}-${new Date().toISOString().slice(0, 10)}.${exportFormat}`;
+        const fname = `${slugify(identity.name || "howitsgoing")}-${slugify(primary?.def.shortLabel ?? "card")}-${new Date().toISOString().slice(0, 10)}.${exportFormat}`;
         downloadBlob(blob, fname);
         setToast("Saved! Go post it 🎉");
       } else {
@@ -95,7 +97,7 @@ export function Studio({ mode, connections, initial }: StudioProps) {
     if (!s?.result) return;
     const value = formatValue(s.result.value, s.def.format, s.result.currency);
     const change = describeChange(s.result, s.def.kind, s.def.format, config.period);
-    const who = config.appName ? `${config.appName} update: ` : "";
+    const who = identity.name ? `${identity.name} update: ` : "";
     const changeText = change ? ` (${change.text} ${change.context})` : "";
     const text = `${s.def.emoji} ${who}${s.label.toLowerCase()} is at ${value}${changeText}. #buildinpublic`;
     try {
@@ -124,39 +126,24 @@ export function Studio({ mode, connections, initial }: StudioProps) {
 
   const defaultName = () => {
     const s = slots[0];
-    return s ? `${config.appName ? config.appName + " · " : ""}${s.def.shortLabel}` : "Untitled card";
+    return s ? `${identity.name ? identity.name + " · " : ""}${s.def.shortLabel}` : "Untitled card";
+  };
+
+  const onPickLogo = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      update({ logoUrl: await fileToLogoDataUrl(file) });
+    } catch (err) {
+      setToast((err as Error).message || "Couldn't read that image");
+    }
   };
 
   const setMetric = (i: number, ref: MetricRef & { label?: string }) => {
     const metrics = [...config.metrics];
     metrics[i] = ref;
-    const next: CardConfig = { ...config, metrics };
-    // GitHub repo picked (or changed): auto-fill the card name + owner avatar,
-    // unless the user already typed a custom name. Runs in the event handler
-    // so manual edits are never clobbered by a background effect.
-    const before = firstGithubRepo(config.metrics);
-    const after = firstGithubRepo(next.metrics);
-    if (after && after !== before) {
-      const prevAuto = before ?? "";
-      const prevAutoShort = before?.split("/")[1] ?? "";
-      if (!next.appName || next.appName === prevAuto || next.appName === prevAutoShort) {
-        next.appName = after.slice(0, 40);
-      }
-      if (!next.logoUrl || (before && next.logoUrl === repoIconUrl(before))) {
-        next.logoUrl = repoIconUrl(after);
-      }
-    }
-    if (!after && before && (next.logoUrl ?? "").startsWith("/api/repo-icon")) {
-      next.logoUrl = "";
-    }
-    update(next);
-  };
-
-  const applyRepoInfo = () => {
-    const repo = firstGithubRepo(config.metrics);
-    if (!repo) return;
-    setCustomWords(false);
-    update({ appName: repo.slice(0, 40), logoUrl: repoIconUrl(repo) });
+    update({ metrics });
   };
 
   return (
@@ -231,56 +218,66 @@ export function Studio({ mode, connections, initial }: StudioProps) {
 
           <Panel title="Words">
             <div className="grid gap-3">
-              {githubRepo && !customWords ? (
-                <div className="flex items-center gap-3 rounded-2xl border border-line bg-white p-3">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={config.logoUrl || repoIconUrl(githubRepo)}
-                    alt=""
-                    className="size-10 shrink-0 rounded-xl border border-line object-cover"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-extrabold">{config.appName || githubRepo}</div>
-                    <p className="text-xs text-ink/50">Name & icon pulled from GitHub</p>
-                  </div>
-                  <Button size="sm" variant="ghost" onClick={() => setCustomWords(true)}>
-                    Custom
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-[1fr_auto] gap-3">
-                    <Field label="App name">
-                      <Input placeholder="e.g. Pixelfolio" value={config.appName} onChange={(e) => update({ appName: e.target.value })} maxLength={40} />
-                    </Field>
-                    <Field label="Sticker">
-                      <Input className="w-16 text-center text-lg" value={config.emoji} onChange={(e) => update({ emoji: e.target.value })} maxLength={8} placeholder="🚀" />
-                    </Field>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {EMOJI_PICKS.map((e) => (
-                      <button
-                        key={e}
-                        type="button"
-                        onClick={() => update({ emoji: config.emoji === e ? "" : e })}
-                        className={cn("grid size-8 place-items-center rounded-lg text-lg transition hover:bg-ink/[0.06]", config.emoji === e && "bg-ink/[0.08]")}
-                      >
-                        {e}
+              <Field label="App name" help={brand?.name && !config.appName ? `Using “${brand.name}” from your data. Type to override.` : undefined}>
+                <Input placeholder={brand?.name ?? "e.g. Pixelfolio"} value={config.appName} onChange={(e) => update({ appName: e.target.value })} maxLength={40} />
+              </Field>
+              <div>
+                <span className="mb-1.5 block text-[13px] font-bold text-ink/80">Logo</span>
+                <div className="flex items-center gap-2">
+                  <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-xl border border-line bg-white">
+                    {identity.logoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={identity.logoUrl} alt="" className="size-full object-cover" />
+                    ) : (
+                      <span className="text-xs font-bold text-ink/30">—</span>
+                    )}
+                  </span>
+                  {uploadedLogo ? (
+                    <span className="flex h-10 min-w-0 flex-1 items-center justify-between gap-2 rounded-xl border border-line bg-white px-3 text-sm">
+                      <span className="truncate font-semibold text-ink/70">Uploaded image</span>
+                      <button type="button" onClick={() => update({ logoUrl: "" })} className="text-xs font-bold text-ink/50 hover:text-ink">
+                        Remove
                       </button>
-                    ))}
-                  </div>
-                  {githubRepo && (
-                    <Button size="sm" variant="secondary" onClick={applyRepoInfo}>
-                      Use GitHub name & icon
-                    </Button>
+                    </span>
+                  ) : (
+                    <Input
+                      placeholder={brand?.logoUrl ? "Using the repo's avatar" : "https://…/logo.png"}
+                      value={config.logoUrl}
+                      onChange={(e) => update({ logoUrl: e.target.value.trim() })}
+                      className="min-w-0 flex-1"
+                    />
                   )}
-                </>
-              )}
+                  <Button type="button" size="sm" variant="secondary" onClick={() => logoFile.current?.click()}>
+                    Upload
+                  </Button>
+                  <input ref={logoFile} type="file" accept="image/*" hidden onChange={onPickLogo} />
+                </div>
+                <span className="mt-1.5 block text-xs text-ink/50">
+                  {brand?.logoUrl ? "Defaults to the repo's GitHub avatar. Paste an image URL or upload your own." : "Paste an image URL or upload a file."}
+                </span>
+              </div>
               <Field label="Headline" help="Overrides the metric name on the card.">
                 <Input placeholder={slots[0]?.label ?? "Monthly revenue"} value={config.headline} onChange={(e) => update({ headline: e.target.value })} maxLength={60} />
               </Field>
               {config.template === "milestone" ? (
                 <>
+                  <div>
+                    <span className="mb-1.5 block text-[13px] font-bold text-ink/80">Emoji</span>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Input className="mr-1 w-16 text-center text-lg" value={config.emoji} onChange={(e) => update({ emoji: e.target.value })} maxLength={8} placeholder="🎉" />
+                      {EMOJI_PICKS.map((e) => (
+                        <button
+                          key={e}
+                          type="button"
+                          onClick={() => update({ emoji: config.emoji === e ? "" : e })}
+                          className={cn("grid size-8 place-items-center rounded-lg text-lg transition hover:bg-ink/[0.06]", config.emoji === e && "bg-ink/[0.08]")}
+                        >
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="mt-1.5 block text-xs text-ink/50">The big one in the middle of the card.</span>
+                  </div>
                   <Field label="Milestone number" help="Leave blank to round down to a nice number automatically.">
                     <Input
                       inputMode="decimal"
@@ -325,6 +322,7 @@ export function Studio({ mode, connections, initial }: StudioProps) {
                   <Switch checked={config.showChange} onChange={(showChange) => update({ showChange })} label="Change badge" description="▲ 18% vs previous period" />
                 </>
               )}
+              <Switch checked={config.showLogo} onChange={(showLogo) => update({ showLogo })} label="Logo" description="The repo's avatar or your own image, next to the name" />
               <Switch checked={config.showDate} onChange={(showDate) => update({ showDate })} label="Today's date" />
               <Switch checked={config.showWatermark} onChange={(showWatermark) => update({ showWatermark })} label="howitsgoing badge" description="A tiny credit in the corner" />
             </div>
