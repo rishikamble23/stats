@@ -119,7 +119,7 @@ export function bucketFlow(items: DatedValue[], w: Window): SeriesPoint[] {
   const starts = buckets(w);
   const totals = new Map<string, number>(starts.map((d) => [toKey(d), 0]));
   for (const item of items) {
-    if (item.date < w.from || item.date > addDays(w.to, 1)) continue;
+    if (item.date < w.from || item.date >= addDays(w.to, 1)) continue;
     const key = toKey(bucketStart(item.date, w.granularity));
     if (totals.has(key)) totals.set(key, (totals.get(key) ?? 0) + item.value);
   }
