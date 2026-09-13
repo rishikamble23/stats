@@ -110,12 +110,13 @@ Edit `src/lib/db/schema.ts`, run `npm run db:generate`, and commit the generated
 ## Before you open a PR
 
 ```bash
+npm test            # vitest run
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
 npm run build       # next build
 ```
 
-All three should pass without new warnings. There is no automated test suite yet (see the issues labelled `infra` if you'd like to change that), so please say in the PR how you tested the change by hand.
+All four should pass without new warnings. The Node-based Vitest suite covers the shared metric date/series and formatting helpers. Use `npm run test:watch` while editing tests. Keep dates explicit and tests independent of the local timezone. For changes outside this coverage, also say in the PR how you tested them by hand.
 
 Then:
 
